@@ -1,0 +1,22 @@
+# Byte-compiled / cache
+__pycache__/
+*.py[cod]
+
+# PyInstaller / Build outputs
+build/
+dist/
+/*.exe
+*.pkg
+*.spec.bak
+
+# External reference / temporary folders
+minimalpdfcompress-main/
+New folder (3)/
+*.pdf
+.keep
+
+# System / IDE
+.idea/
+.vscode/
+Thumbs.db
+Desktop.ini
