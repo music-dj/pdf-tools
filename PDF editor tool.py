@@ -188,8 +188,50 @@ class ResizableTextItem(QGraphicsTextItem):
         self.initial_rect = QRectF()
         self.initial_pos = QPointF()
         self.is_editing = False
-        self.alignment = 'left'
+        self.alignment = 'right'
         self.on_size_changed_callback = None
+        self._updating_layout = False
+        self.document().contentsChanged.connect(self._on_contents_changed)
+
+    def _on_contents_changed(self):
+        if getattr(self, '_updating_layout', False):
+            return
+        self._updating_layout = True
+        try:
+            self.update_alignment_layout()
+        finally:
+            self._updating_layout = False
+
+    def update_alignment_layout(self):
+        doc = self.document()
+        if not doc:
+            return
+
+        align_type = getattr(self, 'alignment', 'right')
+        if align_type == 'right':
+            qt_align = Qt.AlignmentFlag.AlignRight
+        elif align_type == 'center':
+            qt_align = Qt.AlignmentFlag.AlignHCenter
+        else:
+            qt_align = Qt.AlignmentFlag.AlignLeft
+
+        # Ensure document textWidth is set to at least idealWidth so all blocks align across multiple lines
+        self.setTextWidth(-1)
+        needed_w = doc.idealWidth()
+        custom_w = getattr(self, 'custom_width', None)
+        target_w = max(needed_w, custom_w) if custom_w else needed_w
+        self.setTextWidth(target_w)
+
+        opt = doc.defaultTextOption()
+        opt.setAlignment(qt_align)
+        doc.setDefaultTextOption(opt)
+
+        cur = QTextCursor(doc)
+        cur.select(QTextCursor.SelectionType.Document)
+        block_fmt = QTextBlockFormat()
+        block_fmt.setAlignment(qt_align)
+        cur.mergeBlockFormat(block_fmt)
+        self.update()
 
     def boundingRect(self):
         r = super().boundingRect()
@@ -262,6 +304,7 @@ class ResizableTextItem(QGraphicsTextItem):
             if f.pointSize() != new_size:
                 f.setPointSize(new_size)
                 self.setFont(f)
+                self.update_alignment_layout()
 
                 # Keep anchored corner fixed in scene coordinates
                 new_rect = super().boundingRect()
@@ -306,30 +349,12 @@ class ResizableTextItem(QGraphicsTextItem):
         cursor = self.textCursor()
         cursor.clearSelection()
         self.setTextCursor(cursor)
+        self.update_alignment_layout()
         super().focusOutEvent(event)
 
     def set_alignment(self, align_type):
         self.alignment = align_type
-        doc = self.document()
-        if align_type == 'right':
-            qt_align = Qt.AlignmentFlag.AlignRight
-        elif align_type == 'center':
-            qt_align = Qt.AlignmentFlag.AlignHCenter
-        else:
-            qt_align = Qt.AlignmentFlag.AlignLeft
-
-        opt = doc.defaultTextOption()
-        opt.setAlignment(qt_align)
-        doc.setDefaultTextOption(opt)
-
-        cursor = QTextCursor(doc)
-        cursor.select(QTextCursor.SelectionType.Document)
-        block_fmt = QTextBlockFormat()
-        block_fmt.setAlignment(qt_align)
-        cursor.mergeBlockFormat(block_fmt)
-        cursor.clearSelection()
-        self.setTextCursor(cursor)
-        self.update()
+        self.update_alignment_layout()
 
     def keyPressEvent(self, event):
         if self.is_editing or (self.textInteractionFlags() & Qt.TextInteractionFlag.TextEditorInteraction):
@@ -596,7 +621,7 @@ class GenericWorker(QThread):
 class ModernUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PDF Master Pro V3.2")
+        self.setWindowTitle("PDF Master Pro V3.2.1")
         self.setGeometry(100, 100, 1180, 820)
         
         # Set Window and Taskbar Icon
@@ -1597,6 +1622,7 @@ class ModernUI(QMainWindow):
                     if f.pointSize() != size:
                         f.setPointSize(size)
                         item.setFont(f)
+                        item.update_alignment_layout()
 
     def on_text_font_family_changed(self, font):
         family = font.family()
@@ -1608,6 +1634,7 @@ class ModernUI(QMainWindow):
                     f = item.font()
                     f.setFamily(family)
                     item.setFont(f)
+                    item.update_alignment_layout()
 
     def on_text_bold_toggled(self, checked):
         if hasattr(self, 'draw_view') and self.draw_view.scene():
@@ -1618,6 +1645,7 @@ class ModernUI(QMainWindow):
                     f = item.font()
                     f.setBold(checked)
                     item.setFont(f)
+                    item.update_alignment_layout()
 
     def on_text_italic_toggled(self, checked):
         if hasattr(self, 'draw_view') and self.draw_view.scene():
@@ -1628,6 +1656,7 @@ class ModernUI(QMainWindow):
                     f = item.font()
                     f.setItalic(checked)
                     item.setFont(f)
+                    item.update_alignment_layout()
 
     def on_text_underline_toggled(self, checked):
         if hasattr(self, 'draw_view') and self.draw_view.scene():
@@ -1638,6 +1667,7 @@ class ModernUI(QMainWindow):
                     f = item.font()
                     f.setUnderline(checked)
                     item.setFont(f)
+                    item.update_alignment_layout()
 
     def on_text_align_clicked(self, align_type):
         self.current_text_alignment = align_type

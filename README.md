@@ -1,8 +1,8 @@
-# PDF Master Pro V3.2 📄✨
+# PDF Master Pro V3.2.1 📄✨
 
 **PDF Master Pro** is a modern, powerful, and comprehensive all-in-one PDF manipulation desktop application built with Python and PyQt6. It provides advanced tools for organizing, converting, editing, rotating, and smartly compressing PDF files with zero hassle.
 
-**برنامج PDF Master Pro V3.2** هو تطبيق مكتبي متكامل واحترافي للتعامل مع ملفات PDF، يتميز بواجهة داكنة أنيقة وعصرية (Catppuccin theme) وسرعة فائقة في معالجة المستندات بدون الحاجة للاتصال بالإنترنت.
+**برنامج PDF Master Pro V3.2.1** هو تطبيق مكتبي متكامل واحترافي للتعامل مع ملفات PDF، يتميز بواجهة داكنة أنيقة وعصرية (Catppuccin theme) وسرعة فائقة في معالجة المستندات بدون الحاجة للاتصال بالإنترنت.
 
 ---
 
