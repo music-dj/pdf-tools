@@ -14,19 +14,25 @@ a = Analysis(
     noarchive=False,
     optimize=0,
 )
+# Qt imports the Windows ICU API. A third-party ICU on PATH can shadow it
+# with a different ABI when collected into PyInstaller's runtime directory.
+a.binaries = [
+    entry for entry in a.binaries
+    if entry[0].lower() != 'icuuc.dll'
+]
+
 pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
     [],
-    name='PDF Master Pro V3.2',
+    exclude_binaries=True,
+    name='PDF Master Pro',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
+    upx=False,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -36,4 +42,13 @@ exe = EXE(
     codesign_identity=None,
     entitlements_file=None,
     icon=['engine pdf.ico'],
+)
+
+bundle = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    strip=False,
+    upx=False,
+    name='PDF Master Pro',
 )

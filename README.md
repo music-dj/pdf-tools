@@ -69,12 +69,12 @@ You can download the pre-compiled, fully standalone portable executable (`PDF Ma
 
 ## 📦 Building Standalone Executable | بناء ملف التشغيل
 
-To build the standalone `.exe` using PyInstaller:
+To build the Windows application folder using PyInstaller:
 
 ```bash
 pyinstaller "PDF Master Pro.spec" --noconfirm
 ```
-The output file will be generated in `dist/PDF Master Pro V3.exe`.
+Run `dist/PDF Master Pro/PDF Master Pro.exe`. Keep the adjacent `_internal` folder with the executable, including when copying it to another PC.
 
 ---
 
