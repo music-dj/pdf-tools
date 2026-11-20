@@ -4,8 +4,6 @@ import os
 import subprocess
 import tempfile
 import math
-import fitz  # PyMuPDF
-from pdf2docx import Converter
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QTabWidget, QPushButton, QLabel, QFileDialog, QListWidget, 
@@ -15,8 +13,8 @@ from PyQt6.QtWidgets import (
     QListWidgetItem, QScrollArea, QCheckBox, QGraphicsItem, QProgressDialog, QSlider,
     QFontComboBox, QButtonGroup, QGraphicsEllipseItem, QMenu
 )
-from PyQt6.QtCore import Qt, QPointF, QSize, QRectF, QThread, pyqtSignal
-from PyQt6.QtGui import QPen, QColor, QPainterPath, QPixmap, QImage, QIcon, QFont, QBrush, QTextCursor, QTextBlockFormat
+from PyQt6.QtCore import Qt, QPointF, QSize, QRectF, QThread, pyqtSignal, QByteArray, QBuffer, QIODevice, QMarginsF, QSizeF
+from PyQt6.QtGui import QPen, QColor, QPainterPath, QPixmap, QImage, QIcon, QFont, QBrush, QTextCursor, QTextBlockFormat, QPainter, QPdfWriter, QPageSize
 
 # Custom GraphicsView supporting external file Drag & Drop
 class DroppableGraphicsView(QGraphicsView):
@@ -194,7 +192,7 @@ class ResizableTextItem(QGraphicsTextItem):
         self.initial_rect = QRectF()
         self.initial_pos = QPointF()
         self.is_editing = False
-        self.alignment = 'right'
+        self.alignment = 'left'
         self.on_size_changed_callback = None
         self._updating_layout = False
         self.document().contentsChanged.connect(self._on_contents_changed)
@@ -213,7 +211,7 @@ class ResizableTextItem(QGraphicsTextItem):
         if not doc:
             return
 
-        align_type = getattr(self, 'alignment', 'right')
+        align_type = getattr(self, 'alignment', 'left')
         if align_type == 'right':
             qt_align = Qt.AlignmentFlag.AlignRight
         elif align_type == 'center':
@@ -377,13 +375,13 @@ class ResizableTextItem(QGraphicsTextItem):
         is_saving = getattr(self.scene(), 'is_saving', False)
         if self.isSelected() and not self.is_editing and not is_saving:
             painter.save()
-            pen = QPen(QColor('#89b4fa'), 1, Qt.PenStyle.DashLine)
+            pen = QPen(QColor('#54efff'), 1, Qt.PenStyle.DashLine)
             painter.setPen(pen)
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(super().boundingRect())
 
-            painter.setPen(QPen(QColor('#11111b'), 1))
-            painter.setBrush(QBrush(QColor('#89b4fa')))
+            painter.setPen(QPen(QColor('#091222'), 1))
+            painter.setBrush(QBrush(QColor('#54efff')))
             for h_rect in self.get_handle_rects().values():
                 painter.drawRect(h_rect)
             painter.restore()
@@ -528,7 +526,7 @@ class InteractiveScene(QGraphicsScene):
                 'text': it.toPlainText(),
                 'font': QFont(it.font()),
                 'color': QColor(it.defaultTextColor()),
-                'alignment': getattr(it, 'alignment', 'right'),
+                'alignment': getattr(it, 'alignment', 'left'),
                 'opacity': it.opacity(),
                 'pos': it.pos()
             }
@@ -540,7 +538,7 @@ class InteractiveScene(QGraphicsScene):
         new_item = ResizableTextItem(data['text'], scene=self)
         new_item.setFont(QFont(data['font']))
         new_item.setDefaultTextColor(QColor(data['color']))
-        new_item.set_alignment(data.get('alignment', 'right'))
+        new_item.set_alignment(data.get('alignment', 'left'))
         new_item.setOpacity(data.get('opacity', 1.0))
         new_pos = data['pos'] + QPointF(25, 25)
         new_item.setPos(new_pos)
@@ -585,7 +583,7 @@ class InteractiveScene(QGraphicsScene):
             else:
                 # Outline rect
                 self.current_rect_item.setPen(self.pen)
-                self.current_rect_item.setBrush(Qt.BrushStyle.NoBrush)
+                self.current_rect_item.setBrush(QBrush(Qt.BrushStyle.NoBrush))
                 
             self.current_rect_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             self.current_rect_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
@@ -600,7 +598,7 @@ class InteractiveScene(QGraphicsScene):
             text_item = ResizableTextItem("Type text here...", scene=self)
             text_item.setFont(font)
             text_item.setDefaultTextColor(self.text_color)
-            text_item.set_alignment(getattr(self, 'text_alignment', 'right'))
+            text_item.set_alignment(getattr(self, 'text_alignment', 'left'))
             text_item.setPos(event.scenePos())
             text_item.on_size_changed_callback = self.on_text_size_changed_cb
 
@@ -656,15 +654,15 @@ class InteractiveScene(QGraphicsScene):
                 self.clearSelection()
                 item.setSelected(True)
             menu = QMenu()
-            menu.setStyleSheet("QMenu { background-color: #313244; color: #cdd6f4; border: 1px solid #45475a; } QMenu::item:selected { background-color: #89b4fa; color: #11111b; font-weight: bold; }")
-            act_front = menu.addAction("⏫ Bring to Front (أعلى طبقة)")
-            act_forward = menu.addAction("🔼 Move Forward (تقديم خطوة)")
-            act_backward = menu.addAction("🔽 Move Backward (تأخير خطوة)")
-            act_back = menu.addAction("⏬ Send to Back (أسفل طبقة)")
+            menu.setStyleSheet("QMenu { background-color: #182541; color: #e3f2ff; border: 1px solid #233657; } QMenu::item:selected { background-color: #54efff; color: #091222; font-weight: bold; }")
+            act_front = menu.addAction("⏫ Bring to Front")
+            act_forward = menu.addAction("🔼 Move Forward")
+            act_backward = menu.addAction("🔽 Move Backward")
+            act_back = menu.addAction("⏬ Send to Back")
             menu.addSeparator()
-            act_copy = menu.addAction("📋 Copy (نسخ)")
-            act_dup = menu.addAction("📑 Duplicate (مضاعفة)")
-            act_del = menu.addAction("🗑️ Delete (حذف)")
+            act_copy = menu.addAction("📋 Copy")
+            act_dup = menu.addAction("📑 Duplicate")
+            act_del = menu.addAction("🗑️ Delete")
 
             action = menu.exec(event.screenPos())
             if action == act_front:
@@ -758,48 +756,82 @@ class ModernUI(QMainWindow):
             self.setWindowIcon(QIcon(icon_path))
             
         self.setStyleSheet("""
-            QMainWindow { background-color: #1e1e2e; }
-            QWidget { color: #cdd6f4; font-family: 'Segoe UI', Arial; font-size: 13px; }
+            QMainWindow { background-color: #0c1324; }
+            QWidget { color: #e3f2ff; font-family: 'Segoe UI', Arial; font-size: 13px; }
             
             /* Main Top Tabs */
-            QTabWidget#main_tabs::pane { border: 1px solid #45475a; border-radius: 8px; background-color: #181825; }
-            QTabWidget#main_tabs > QTabBar::tab { background: #313244; color: #a6adc8; padding: 11px 26px; margin: 3px; border-radius: 6px; font-weight: bold; font-size: 13px; }
-            QTabWidget#main_tabs > QTabBar::tab:selected { background: #89b4fa; color: #11111b; font-weight: bold; }
-            QTabWidget#main_tabs > QTabBar::tab:hover:!selected { background: #45475a; color: #cdd6f4; }
+            QTabWidget#main_tabs::pane { border: 1px solid #233657; border-radius: 8px; background-color: #10192d; }
+            QTabWidget#main_tabs > QTabBar::tab { background: #182541; color: #a6beda; padding: 11px 26px; margin: 3px; border-radius: 6px; font-weight: bold; font-size: 13px; }
+            QTabWidget#main_tabs > QTabBar::tab:selected { background: #54efff; color: #091222; font-weight: bold; }
+            QTabWidget#main_tabs > QTabBar::tab:hover:!selected { background: #233657; color: #e3f2ff; }
             
             /* Nested Sub Tabs */
-            QTabWidget#sub_tabs::pane { border: 1px solid #313244; border-radius: 6px; background-color: #181825; padding: 5px; }
-            QTabWidget#sub_tabs > QTabBar::tab { background: #1e1e2e; color: #a6adc8; padding: 8px 18px; margin: 2px; border-radius: 5px; font-weight: bold; font-size: 12px; }
-            QTabWidget#sub_tabs > QTabBar::tab:selected { background: #45475a; color: #89b4fa; }
-            QTabWidget#sub_tabs > QTabBar::tab:hover:!selected { background: #313244; color: #cdd6f4; }
+            QTabWidget#sub_tabs::pane { border: 1px solid #182541; border-radius: 6px; background-color: #10192d; padding: 5px; }
+            QTabWidget#sub_tabs > QTabBar::tab { background: #0c1324; color: #a6beda; padding: 8px 18px; margin: 2px; border-radius: 5px; font-weight: bold; font-size: 12px; }
+            QTabWidget#sub_tabs > QTabBar::tab:selected { background: #233657; color: #54efff; }
+            QTabWidget#sub_tabs > QTabBar::tab:hover:!selected { background: #182541; color: #e3f2ff; }
             
-            QPushButton { background-color: #45475a; color: #cdd6f4; border: none; padding: 8px 16px; border-radius: 5px; font-weight: bold; }
-            QPushButton:hover { background-color: #585b70; }
-            QPushButton:disabled { background-color: #313244; color: #7f849c; }
-            QLineEdit, QSpinBox, QGroupBox, QScrollArea { background-color: #181825; border: 1px solid #45475a; padding: 5px; border-radius: 5px; }
-            QListWidget { background-color: #181825; border: 1px solid #45475a; border-radius: 5px; outline: none; }
-            QListWidget::item:selected { background-color: #45475a; border-radius: 3px; }
-            QGroupBox { border: 1px solid #45475a; border-radius: 6px; margin-top: 1.2ex; font-weight: bold; padding-top: 10px; }
-            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #89b4fa; }
+            QPushButton { background-color: #233657; color: #e3f2ff; border: none; padding: 7px 11px; border-radius: 3px; font-weight: bold; }
+            QPushButton:hover { background-color: #334b72; }
+            QPushButton:disabled { background-color: #182541; color: #8196b8; }
+            QLineEdit, QSpinBox, QGroupBox, QScrollArea { background-color: #10192d; border: 1px solid #233657; padding: 5px; border-radius: 5px; }
+            QListWidget { background-color: #10192d; border: 1px solid #233657; border-radius: 5px; outline: none; }
+            QListWidget::item:selected { background-color: #233657; border-radius: 3px; }
+            QGroupBox { border: 1px solid #233657; border-radius: 6px; margin-top: 1.2ex; font-weight: bold; padding-top: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 12px; padding: 0 5px; color: #54efff; }
             QCheckBox, QRadioButton { padding: 4px; }
+            QPushButton:focus, QLineEdit:focus, QComboBox:focus, QTabBar::tab:focus {
+                border: 1px solid #ff79cb;
+            }
+            QComboBox, QToolTip, QMenu {
+                background-color: #10192d; color: #e3f2ff; border: 1px solid #334b72;
+            }
         """)
 
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QVBoxLayout(central_widget)
 
+        title = QLabel("PDF MASTER PRO")
+        title.setStyleSheet(
+            "color: #54efff; font-family: 'Bahnschrift', 'Segoe UI';"
+            "font-size: 23px; font-weight: bold; padding: 8px 6px;"
+            "border-bottom: 2px solid #ff79cb;"
+        )
+        main_layout.addWidget(title)
+
         self.tabs = QTabWidget()
         self.tabs.setObjectName("main_tabs")
         main_layout.addWidget(self.tabs)
 
-        self.setup_organize_master_tab()
-        self.setup_convert_master_tab()
-        self.setup_edit_master_tab()
-        self.setup_compress_master_tab()
+        builders = {
+            "Organize Pages": self.setup_organize_master_tab,
+            "Convert": self.setup_convert_master_tab,
+            "Edit & Annotate": self.setup_edit_master_tab,
+            "Compress": self.create_compress_widget,
+        }
+        for label in builders:
+            self.tabs.addTab(QWidget(), label)
+
+        def load_tab(index):
+            if index < 0:
+                return
+            page = self.tabs.widget(index)
+            if page.layout() is None:
+                layout = QVBoxLayout(page)
+                layout.setContentsMargins(0, 0, 0, 0)
+                scroll = QScrollArea()
+                scroll.setWidgetResizable(True)
+                scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+                scroll.setWidget(builders[self.tabs.tabText(index)]())
+                layout.addWidget(scroll)
+
+        self.tabs.currentChanged.connect(load_tab)
+        load_tab(self.tabs.currentIndex())
 
         footer = QLabel("© 2026 MRT — All Rights Reserved")
         footer.setAlignment(Qt.AlignmentFlag.AlignRight)
-        footer.setStyleSheet("color: #a6adc8; font-size: 11px; padding: 5px;")
+        footer.setStyleSheet("color: #a6beda; font-size: 11px; padding: 5px;")
         main_layout.addWidget(footer)
 
     def run_background_task(self, title, work_func, on_success, *args, **kwargs):
@@ -894,6 +926,8 @@ class ModernUI(QMainWindow):
         return img.copy()
 
     def get_thumbnail(self, path):
+        import pymupdf as fitz
+
         try:
             if path.lower().endswith('.pdf'):
                 doc = fitz.open(path)
@@ -946,7 +980,7 @@ class ModernUI(QMainWindow):
         btn_layout = QHBoxLayout()
         btn_add = QPushButton("➕ Add Files")
         btn_remove = QPushButton("🗑️ Remove Selected")
-        btn_remove.setStyleSheet("background-color: #f38ba8; color: #11111b;")
+        btn_remove.setStyleSheet("background-color: #ff79cb; color: #091222;")
         btn_view_list = QPushButton("📄 List View")
         btn_view_icon = QPushButton("🖼️ Thumbnail View")
 
@@ -1002,7 +1036,7 @@ class ModernUI(QMainWindow):
         btn_sort_pdf = QPushButton("🔤 Sort Alphabetically")
         btn_sort_pdf.clicked.connect(lambda: self.sort_and_update(self.pdf_list))
         btn_merge = QPushButton("🔗 Merge PDFs Now")
-        btn_merge.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold; padding: 10px;")
+        btn_merge.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold; padding: 10px;")
         btn_merge.clicked.connect(self.merge_pdfs)
         hm.addWidget(btn_sort_pdf)
         hm.addWidget(btn_merge)
@@ -1018,7 +1052,7 @@ class ModernUI(QMainWindow):
         sub.addTab(w_reorder, "🗂️ Reorder Pages")
 
         vl.addWidget(sub)
-        self.tabs.addTab(tab, "📑 Organize Pages")
+        return tab
 
     # ================= MASTER TAB 2: CONVERT HUB =================
     def setup_convert_master_tab(self):
@@ -1042,7 +1076,7 @@ class ModernUI(QMainWindow):
         self.radio_fast = QRadioButton("Fast Quality (Compressed)")
         self.radio_high.setChecked(True)
         btn_convert = QPushButton("✨ Convert Images to PDF Now")
-        btn_convert.setStyleSheet("background-color: #a6e3a1; color: #11111b; font-weight: bold; padding: 10px;")
+        btn_convert.setStyleSheet("background-color: #97f5be; color: #091222; font-weight: bold; padding: 10px;")
         btn_convert.clicked.connect(self.images_to_pdf)
         action_layout.addWidget(btn_sort)
         action_layout.addWidget(self.radio_high)
@@ -1057,9 +1091,10 @@ class ModernUI(QMainWindow):
         grp_w2p = QGroupBox("📘 Microsoft Word to PDF (Native 100% Fidelity)")
         gl_w = QVBoxLayout(grp_w2p)
         lbl_w_info = QLabel("Converts .docx and .doc documents using native Word engine with exact preservation of Arabic fonts, layout, and tables.")
-        lbl_w_info.setStyleSheet("color: #a6adc8; padding: 8px; font-size: 13px;")
+        lbl_w_info.setWordWrap(True)
+        lbl_w_info.setStyleSheet("color: #a6beda; padding: 8px; font-size: 13px;")
         btn_w2p = DropButton("📄 Select Word Document (.docx, .doc — Drag & Drop Supported)", self.word_to_pdf)
-        btn_w2p.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold; font-size: 14px; padding: 14px;")
+        btn_w2p.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold; font-size: 14px; padding: 14px;")
         btn_w2p.clicked.connect(lambda: self.word_to_pdf())
         gl_w.addWidget(lbl_w_info)
         gl_w.addWidget(btn_w2p)
@@ -1070,17 +1105,18 @@ class ModernUI(QMainWindow):
         # Sub C: Word to Pages
         w_w2pages = QWidget()
         vwp = QVBoxLayout(w_w2pages)
-        grp_w2pages = QGroupBox("📘 Microsoft Word to Pages (تفكيك مستند الوورد إلى صفحات منفردة)")
+        grp_w2pages = QGroupBox("📘 Microsoft Word to Pages")
         gl_wp = QVBoxLayout(grp_w2pages)
         lbl_wp_info = QLabel(
             "Converts a multi-page Microsoft Word document (.docx, .doc) into individual single-page files.\n"
             "Guarantees 100% exact original layout, crisp vector fonts, Arabic ligatures, and tables using the native Word engine."
         )
-        lbl_wp_info.setStyleSheet("color: #a6adc8; padding: 10px; font-size: 13px; line-height: 1.4;")
+        lbl_wp_info.setWordWrap(True)
+        lbl_wp_info.setStyleSheet("color: #a6beda; padding: 10px; font-size: 13px; line-height: 1.4;")
         
         fmt_layout = QHBoxLayout()
         lbl_fmt = QLabel("Output Format:")
-        lbl_fmt.setStyleSheet("font-weight: bold; color: #cdd6f4;")
+        lbl_fmt.setStyleSheet("font-weight: bold; color: #e3f2ff;")
         self.radio_w2p_pdf = QRadioButton("📑 Single-Page PDF (100% Exact Native Fidelity - Recommended)")
         self.radio_w2p_docx = QRadioButton("📝 Single-Page Word (.docx)")
         self.radio_w2p_both = QRadioButton("📦 Both (PDF + DOCX)")
@@ -1092,7 +1128,7 @@ class ModernUI(QMainWindow):
         fmt_layout.addStretch()
 
         btn_w2pages = DropButton("📄 Select Word Document to Split into Pages (Drag & Drop Supported)", self.word_to_pages)
-        btn_w2pages.setStyleSheet("background-color: #a6e3a1; color: #11111b; font-weight: bold; font-size: 14px; padding: 14px;")
+        btn_w2pages.setStyleSheet("background-color: #97f5be; color: #091222; font-weight: bold; font-size: 14px; padding: 14px;")
         btn_w2pages.clicked.connect(lambda: self.word_to_pages())
         
         gl_wp.addWidget(lbl_wp_info)
@@ -1108,9 +1144,10 @@ class ModernUI(QMainWindow):
         grp_p2w = QGroupBox("📝 PDF to Microsoft Word (.docx)")
         gl_p = QVBoxLayout(grp_p2w)
         lbl_p_info = QLabel("Extracts and converts PDF pages into an editable Word document.")
-        lbl_p_info.setStyleSheet("color: #a6adc8; padding: 8px; font-size: 13px;")
+        lbl_p_info.setWordWrap(True)
+        lbl_p_info.setStyleSheet("color: #a6beda; padding: 8px; font-size: 13px;")
         btn_p2w = DropButton("📄 Select PDF to Convert to Word (Drag & Drop Supported)", self.pdf_to_word)
-        btn_p2w.setStyleSheet("background-color: #74c7ec; color: #11111b; font-weight: bold; font-size: 14px; padding: 14px;")
+        btn_p2w.setStyleSheet("background-color: #74c7ec; color: #091222; font-weight: bold; font-size: 14px; padding: 14px;")
         btn_p2w.clicked.connect(lambda: self.pdf_to_word())
         gl_p.addWidget(lbl_p_info)
         gl_p.addWidget(btn_p2w)
@@ -1124,9 +1161,10 @@ class ModernUI(QMainWindow):
         grp_p2i = QGroupBox("📸 PDF to High-Resolution Images")
         gl_i = QVBoxLayout(grp_p2i)
         lbl_i_info = QLabel("Extracts all pages from a PDF as 300 DPI high-resolution PNG images into an automatic subfolder.")
-        lbl_i_info.setStyleSheet("color: #a6adc8; padding: 8px; font-size: 13px;")
+        lbl_i_info.setWordWrap(True)
+        lbl_i_info.setStyleSheet("color: #a6beda; padding: 8px; font-size: 13px;")
         btn_p2i = DropButton("📸 Select PDF & Extract Images (Drag & Drop Supported)", self.pdf_to_images)
-        btn_p2i.setStyleSheet("background-color: #fab387; color: #11111b; font-weight: bold; font-size: 14px; padding: 14px;")
+        btn_p2i.setStyleSheet("background-color: #fab387; color: #091222; font-weight: bold; font-size: 14px; padding: 14px;")
         btn_p2i.clicked.connect(lambda: self.pdf_to_images())
         gl_i.addWidget(lbl_i_info)
         gl_i.addWidget(btn_p2i)
@@ -1143,9 +1181,10 @@ class ModernUI(QMainWindow):
             "Converts a multi-page PDF into separate individual PDF files for every page.\n"
             "Guarantees 100% exact original clarity, crisp vector fonts, and lossless images without any rasterization or degradation."
         )
-        lbl_p2p_info.setStyleSheet("color: #a6adc8; padding: 10px; font-size: 13px; line-height: 1.4;")
+        lbl_p2p_info.setWordWrap(True)
+        lbl_p2p_info.setStyleSheet("color: #a6beda; padding: 10px; font-size: 13px; line-height: 1.4;")
         btn_p2p = DropButton("📑 Select PDF to Convert to Pages (Drag & Drop Supported)", self.pdf_to_pages)
-        btn_p2p.setStyleSheet("background-color: #a6e3a1; color: #11111b; font-weight: bold; font-size: 14px; padding: 14px;")
+        btn_p2p.setStyleSheet("background-color: #97f5be; color: #091222; font-weight: bold; font-size: 14px; padding: 14px;")
         btn_p2p.clicked.connect(lambda *a: self.pdf_to_pages())
         gl_pages.addWidget(lbl_p2p_info)
         gl_pages.addWidget(btn_p2p)
@@ -1158,7 +1197,7 @@ class ModernUI(QMainWindow):
         sub.addTab(w_rotate, "🔄 Rotate PDF")
 
         vl.addWidget(sub)
-        self.tabs.addTab(tab, "🔄 Convert Hub")
+        return tab
 
     # ================= MASTER TAB 3: EDIT & ANNOTATE =================
     def setup_edit_master_tab(self):
@@ -1174,14 +1213,11 @@ class ModernUI(QMainWindow):
         sub.addTab(w_num, "🔢 Page Numbering")
 
         vl.addWidget(sub)
-        self.tabs.addTab(tab, "🎨 Edit & Annotate")
-
-    # ================= MASTER TAB 4: SMART COMPRESS =================
-    def setup_compress_master_tab(self):
-        w_comp = self.create_compress_widget()
-        self.tabs.addTab(w_comp, "🗜️ Smart Compress")
+        return tab
 
     def images_to_pdf(self):
+        import pymupdf as fitz
+
         if self.img_list.count() == 0: return
         img_paths = [self.img_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.img_list.count())]
         out_path = self.get_auto_output_path(img_paths[0], "converted", ".pdf")
@@ -1222,6 +1258,8 @@ class ModernUI(QMainWindow):
         self.run_background_task("Converting Images to PDF...", work, lambda r: self.show_msg("Success", f"Saved successfully to:\n{out_path}"))
 
     def merge_pdfs(self):
+        import pymupdf as fitz
+
         if self.pdf_list.count() == 0: return
         pdf_paths = [self.pdf_list.item(i).data(Qt.ItemDataRole.UserRole) for i in range(self.pdf_list.count())]
         out_path = self.get_auto_output_path(pdf_paths[0], "merged", ".pdf")
@@ -1249,7 +1287,7 @@ class ModernUI(QMainWindow):
         self.lbl_split_info = QLabel("No PDF loaded.")
         
         btn_save = QPushButton("✂️ 2. Save Selected Pages")
-        btn_save.setStyleSheet("background-color: #fab387; color: #11111b;")
+        btn_save.setStyleSheet("background-color: #fab387; color: #091222;")
         btn_save.clicked.connect(self.save_split_pdf)
         
         control_hl.addWidget(btn_load)
@@ -1269,6 +1307,8 @@ class ModernUI(QMainWindow):
         return tab
 
     def load_pdf_for_split(self, path=None):
+        import pymupdf as fitz
+
         if not path:
             path, _ = QFileDialog.getOpenFileName(self, "Select PDF", "", "PDF Files (*.pdf)")
         if not path: return
@@ -1306,6 +1346,8 @@ class ModernUI(QMainWindow):
         doc.close()
 
     def save_split_pdf(self):
+        import pymupdf as fitz
+
         if not self.split_pdf_path: return
         selected_pages = [i for i, chk in enumerate(self.split_checkboxes) if chk.isChecked()]
         if not selected_pages: return self.show_msg("Warning", "No pages selected!")
@@ -1334,10 +1376,11 @@ class ModernUI(QMainWindow):
         btn_load.clicked.connect(lambda *a: self.load_pdf_for_reorder())
         
         self.lbl_reorder_info = QLabel("Open a PDF. Drag pages or use arrow buttons to reorder.")
-        self.lbl_reorder_info.setStyleSheet("color: #a6adc8; font-weight: 500;")
+        self.lbl_reorder_info.setWordWrap(True)
+        self.lbl_reorder_info.setStyleSheet("color: #a6beda; font-weight: 500;")
         
         btn_save = QPushButton("🔄 2. Save Reordered PDF")
-        btn_save.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold; padding: 10px 18px;")
+        btn_save.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold; padding: 10px 18px;")
         btn_save.clicked.connect(self.save_reorder_pdf)
         
         control_hl.addWidget(btn_load)
@@ -1363,7 +1406,7 @@ class ModernUI(QMainWindow):
         btn_last = QPushButton("⏭ To Last")
         btn_reverse = QPushButton("🔄 Reverse All")
         btn_remove = QPushButton("🗑️ Remove Page")
-        btn_remove.setStyleSheet("background-color: #f38ba8; color: #11111b; font-weight: bold;")
+        btn_remove.setStyleSheet("background-color: #ff79cb; color: #091222; font-weight: bold;")
         btn_view_list = QPushButton("📄 List View")
         btn_view_icon = QPushButton("🖼️ Grid View")
 
@@ -1464,6 +1507,8 @@ class ModernUI(QMainWindow):
             self.lbl_reorder_info.setText(f"Total: {count} pages. Drag & drop or use buttons to reorder.")
 
     def load_pdf_for_reorder(self, path=None):
+        import pymupdf as fitz
+
         if not path or not isinstance(path, str):
             path, _ = QFileDialog.getOpenFileName(self, "Select PDF to Reorder", "", "PDF Files (*.pdf)")
         if not path or not os.path.exists(path):
@@ -1490,6 +1535,8 @@ class ModernUI(QMainWindow):
         self.update_reorder_labels()
 
     def save_reorder_pdf(self):
+        import pymupdf as fitz
+
         if not self.reorder_pdf_path or self.reorder_list.count() == 0:
             self.show_msg("Notice", "Please open a PDF file with pages first.")
             return
@@ -1517,50 +1564,50 @@ class ModernUI(QMainWindow):
         
         self.btn_mode_select = QPushButton("↖️ Select")
         self.btn_mode_draw = QPushButton("🖋️ Pen")
-        self.btn_mode_whiteout = QPushButton("⬜ Whiteout (طمس أبيض)")
-        self.btn_mode_whiteout.setToolTip("Pure white borderless box to cover/redact words (مربع تبييض أبيض بدون إطار)")
-        self.btn_mode_whiteout.setStyleSheet("background-color: #ffffff; color: #11111b; font-weight: bold; border-radius: 4px; padding: 4px 10px;")
+        self.btn_mode_whiteout = QPushButton("⬜ White Cover")
+        self.btn_mode_whiteout.setToolTip("Cover an area with a solid white rectangle")
+        self.btn_mode_whiteout.setStyleSheet("background-color: #ffffff; color: #091222; font-weight: bold; border-radius: 4px; padding: 4px 10px;")
         
-        self.btn_mode_rect = QPushButton("🔲 Rect (Outline)")
-        self.btn_mode_srect = QPushButton("⬛ Rect (Solid)")
+        self.btn_mode_rect = QPushButton("🔲 Outline Box")
+        self.btn_mode_srect = QPushButton("⬛ Filled Box")
         self.btn_mode_text = QPushButton("🔤 Text")
         
         self.btn_draw_color = QPushButton("🎨 Color")
-        self.btn_draw_color.setStyleSheet("background-color: #f9e2af; color: #11111b; font-weight: bold;")
+        self.btn_draw_color.setStyleSheet("background-color: #ffe486; color: #091222; font-weight: bold;")
         self.btn_draw_color.clicked.connect(self.pick_draw_color)
 
         lbl_pen_size = QLabel("Brush:")
-        lbl_pen_size.setStyleSheet("color: #a6adc8; margin-left: 4px;")
+        lbl_pen_size.setStyleSheet("color: #a6beda; margin-left: 4px;")
         self.spin_pen_size = QSpinBox()
         self.spin_pen_size.setRange(1, 150)
         self.spin_pen_size.setValue(6)
         self.spin_pen_size.setSuffix(" px")
-        self.spin_pen_size.setToolTip("Adjust Pen / Brush Size (حجم القلم أو الفرشاة)")
-        self.spin_pen_size.setStyleSheet("background-color: #45475a; color: #cdd6f4; padding: 4px; border-radius: 4px;")
+        self.spin_pen_size.setToolTip("Adjust Pen / Brush Size")
+        self.spin_pen_size.setStyleSheet("background-color: #233657; color: #e3f2ff; padding: 4px; border-radius: 4px;")
         self.spin_pen_size.valueChanged.connect(self.on_pen_size_changed)
 
         # Layer Ordering Controls
         lbl_layers = QLabel("Layers:")
-        lbl_layers.setStyleSheet("color: #a6adc8; margin-left: 6px;")
+        lbl_layers.setStyleSheet("color: #a6beda; margin-left: 6px;")
         
         btn_layer_front = QPushButton("⏫ Top")
-        btn_layer_front.setToolTip("Bring to Front (نقل للأمام تماماً فوق كل العناصر)")
-        btn_layer_front.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_layer_front.setToolTip("Bring to Front")
+        btn_layer_front.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         btn_layer_front.clicked.connect(self.on_bring_to_front)
 
         btn_layer_forward = QPushButton("🔼 Up")
-        btn_layer_forward.setToolTip("Move Forward One Step (تقديم خطوة للأمام)")
-        btn_layer_forward.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_layer_forward.setToolTip("Move Forward One Step")
+        btn_layer_forward.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         btn_layer_forward.clicked.connect(self.on_move_forward)
 
         btn_layer_backward = QPushButton("🔽 Down")
-        btn_layer_backward.setToolTip("Move Backward One Step (تأخير خطوة للخلف)")
-        btn_layer_backward.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_layer_backward.setToolTip("Move Backward One Step")
+        btn_layer_backward.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         btn_layer_backward.clicked.connect(self.on_move_backward)
 
         btn_layer_back = QPushButton("⏬ Bottom")
-        btn_layer_back.setToolTip("Send to Back (نقل للخلف تحت العناصر)")
-        btn_layer_back.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_layer_back.setToolTip("Send to Back")
+        btn_layer_back.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         btn_layer_back.clicked.connect(self.on_send_to_back)
         
         self.current_draw_mode = 'select'
@@ -1576,16 +1623,16 @@ class ModernUI(QMainWindow):
 
         btn_undo = QPushButton("↩️ Undo")
         btn_undo.setToolTip("Undo last action (Ctrl+Z)")
-        btn_undo.setStyleSheet("background-color: #585b70; color: #cdd6f4;")
+        btn_undo.setStyleSheet("background-color: #334b72; color: #e3f2ff;")
         btn_undo.clicked.connect(self.on_undo_clicked)
 
         btn_redo = QPushButton("↪️ Redo")
         btn_redo.setToolTip("Redo last undone action (Ctrl+Y)")
-        btn_redo.setStyleSheet("background-color: #585b70; color: #cdd6f4;")
+        btn_redo.setStyleSheet("background-color: #334b72; color: #e3f2ff;")
         btn_redo.clicked.connect(self.on_redo_clicked)
         
         btn_save_canvas = QPushButton("💾 Save File")
-        btn_save_canvas.setStyleSheet("background-color: #89dceb; color: #11111b; font-weight: bold;")
+        btn_save_canvas.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold;")
         btn_save_canvas.clicked.connect(self.save_canvas)
         
         tools_hl.addWidget(btn_load)
@@ -1598,33 +1645,37 @@ class ModernUI(QMainWindow):
         tools_hl.addWidget(self.btn_draw_color)
         tools_hl.addWidget(lbl_pen_size)
         tools_hl.addWidget(self.spin_pen_size)
-        tools_hl.addWidget(lbl_layers)
-        tools_hl.addWidget(btn_layer_front)
-        tools_hl.addWidget(btn_layer_forward)
-        tools_hl.addWidget(btn_layer_backward)
-        tools_hl.addWidget(btn_layer_back)
-        tools_hl.addWidget(btn_undo)
-        tools_hl.addWidget(btn_redo)
-        tools_hl.addWidget(btn_save_canvas)
         vl.addLayout(tools_hl)
+
+        layer_hl = QHBoxLayout()
+        layer_hl.addWidget(lbl_layers)
+        layer_hl.addWidget(btn_layer_front)
+        layer_hl.addWidget(btn_layer_forward)
+        layer_hl.addWidget(btn_layer_backward)
+        layer_hl.addWidget(btn_layer_back)
+        layer_hl.addStretch()
+        layer_hl.addWidget(btn_undo)
+        layer_hl.addWidget(btn_redo)
+        layer_hl.addWidget(btn_save_canvas)
+        vl.addLayout(layer_hl)
 
         # Dedicated Text Editing & Formatting Bar
         text_bar_hl = QHBoxLayout()
         lbl_text_title = QLabel("🔤 Text Tools:")
-        lbl_text_title.setStyleSheet("font-weight: bold; color: #89b4fa; font-size: 13px;")
+        lbl_text_title.setStyleSheet("font-weight: bold; color: #54efff; font-size: 13px;")
 
         self.combo_font_family = QFontComboBox()
         self.combo_font_family.setCurrentFont(QFont("Arial"))
-        self.combo_font_family.setStyleSheet("background-color: #45475a; color: #cdd6f4; padding: 4px; border-radius: 4px;")
+        self.combo_font_family.setStyleSheet("background-color: #233657; color: #e3f2ff; padding: 4px; border-radius: 4px;")
         self.combo_font_family.currentFontChanged.connect(self.on_text_font_family_changed)
 
         lbl_size = QLabel("Size:")
-        lbl_size.setStyleSheet("color: #a6adc8;")
+        lbl_size.setStyleSheet("color: #a6beda;")
         self.spin_font_size = QSpinBox()
         self.spin_font_size.setRange(6, 144)
         self.spin_font_size.setValue(12)
         self.spin_font_size.setSuffix(" pt")
-        self.spin_font_size.setStyleSheet("background-color: #45475a; color: #cdd6f4; padding: 4px; border-radius: 4px;")
+        self.spin_font_size.setStyleSheet("background-color: #233657; color: #e3f2ff; padding: 4px; border-radius: 4px;")
         self.spin_font_size.valueChanged.connect(self.on_text_font_size_changed)
 
         self.current_text_color = QColor(0, 0, 0)
@@ -1636,53 +1687,53 @@ class ModernUI(QMainWindow):
         self.btn_text_bold.setCheckable(True)
         self.btn_text_bold.setFixedWidth(36)
         self.btn_text_bold.setToolTip("Bold")
-        self.btn_text_bold.setStyleSheet("background-color: #45475a; color: #cdd6f4; font-weight: bold; border-radius: 4px; padding: 4px;")
+        self.btn_text_bold.setStyleSheet("background-color: #233657; color: #e3f2ff; font-weight: bold; border-radius: 4px; padding: 4px;")
         self.btn_text_bold.toggled.connect(self.on_text_bold_toggled)
 
         self.btn_text_italic = QPushButton("𝑰")
         self.btn_text_italic.setCheckable(True)
         self.btn_text_italic.setFixedWidth(36)
         self.btn_text_italic.setToolTip("Italic")
-        self.btn_text_italic.setStyleSheet("background-color: #45475a; color: #cdd6f4; font-style: italic; border-radius: 4px; padding: 4px;")
+        self.btn_text_italic.setStyleSheet("background-color: #233657; color: #e3f2ff; font-style: italic; border-radius: 4px; padding: 4px;")
         self.btn_text_italic.toggled.connect(self.on_text_italic_toggled)
 
         self.btn_text_underline = QPushButton("𝐔")
         self.btn_text_underline.setCheckable(True)
         self.btn_text_underline.setFixedWidth(36)
         self.btn_text_underline.setToolTip("Underline")
-        self.btn_text_underline.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px;")
+        self.btn_text_underline.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px;")
         self.btn_text_underline.toggled.connect(self.on_text_underline_toggled)
 
         lbl_align = QLabel("Align:")
-        lbl_align.setStyleSheet("color: #a6adc8; margin-left: 6px;")
+        lbl_align.setStyleSheet("color: #a6beda; margin-left: 6px;")
 
-        self.btn_align_right = QPushButton("⫸ يمين")
+        self.btn_align_right = QPushButton("Align Right")
         self.btn_align_right.setCheckable(True)
-        self.btn_align_right.setChecked(True)
-        self.btn_align_right.setToolTip("Align Right (محاذاة لليمين - عربي)")
-        self.btn_align_right.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        self.btn_align_right.setToolTip("Align Right")
+        self.btn_align_right.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         self.btn_align_right.clicked.connect(lambda: self.on_text_align_clicked('right'))
 
-        self.btn_align_center = QPushButton("⫿ توسيط")
+        self.btn_align_center = QPushButton("Center")
         self.btn_align_center.setCheckable(True)
-        self.btn_align_center.setToolTip("Align Center (توسيط في المنتصف)")
-        self.btn_align_center.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        self.btn_align_center.setToolTip("Align Center")
+        self.btn_align_center.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         self.btn_align_center.clicked.connect(lambda: self.on_text_align_clicked('center'))
 
-        self.btn_align_left = QPushButton("⫷ يسار")
+        self.btn_align_left = QPushButton("Align Left")
         self.btn_align_left.setCheckable(True)
-        self.btn_align_left.setToolTip("Align Left (محاذاة لليسار)")
-        self.btn_align_left.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        self.btn_align_left.setChecked(True)
+        self.btn_align_left.setToolTip("Align Left")
+        self.btn_align_left.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         self.btn_align_left.clicked.connect(lambda: self.on_text_align_clicked('left'))
 
         self.align_group = QButtonGroup(self)
         self.align_group.addButton(self.btn_align_right)
         self.align_group.addButton(self.btn_align_center)
         self.align_group.addButton(self.btn_align_left)
-        self.current_text_alignment = 'right'
+        self.current_text_alignment = 'left'
 
         lbl_opacity = QLabel("Opacity:")
-        lbl_opacity.setStyleSheet("color: #a6adc8; margin-left: 6px;")
+        lbl_opacity.setStyleSheet("color: #a6beda; margin-left: 6px;")
         self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
         self.slider_opacity.setRange(10, 100)
         self.slider_opacity.setValue(100)
@@ -1690,30 +1741,30 @@ class ModernUI(QMainWindow):
         self.slider_opacity.setToolTip("Adjust text transparency / opacity (10% - 100%)")
         self.slider_opacity.valueChanged.connect(self.on_text_opacity_changed)
         self.lbl_opacity_val = QLabel("100%")
-        self.lbl_opacity_val.setStyleSheet("color: #89b4fa; font-size: 11px; min-width: 32px;")
+        self.lbl_opacity_val.setStyleSheet("color: #54efff; font-size: 11px; min-width: 32px;")
 
         self.btn_copy_text = QPushButton("📋 Copy")
         self.btn_copy_text.setToolTip("Copy selected text box (Ctrl+C)")
-        self.btn_copy_text.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        self.btn_copy_text.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         self.btn_copy_text.clicked.connect(self.on_copy_text_clicked)
 
         self.btn_paste_text = QPushButton("📋 Paste")
         self.btn_paste_text.setToolTip("Paste copied text box (Ctrl+V)")
-        self.btn_paste_text.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        self.btn_paste_text.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         self.btn_paste_text.clicked.connect(self.on_paste_text_clicked)
 
         self.btn_dup_text = QPushButton("📑 Duplicate")
         self.btn_dup_text.setToolTip("Duplicate selected text box (Ctrl+D)")
-        self.btn_dup_text.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        self.btn_dup_text.setStyleSheet("background-color: #233657; color: #e3f2ff; border-radius: 4px; padding: 4px 8px;")
         self.btn_dup_text.clicked.connect(self.on_duplicate_text_clicked)
 
         self.btn_edit_text_inline = QPushButton("✏️ Edit Text")
         self.btn_edit_text_inline.setToolTip("Edit text in-place (or double click text directly)")
-        self.btn_edit_text_inline.setStyleSheet("background-color: #f9e2af; color: #11111b; font-weight: bold; border-radius: 4px; padding: 4px 10px;")
+        self.btn_edit_text_inline.setStyleSheet("background-color: #ffe486; color: #091222; font-weight: bold; border-radius: 4px; padding: 4px 10px;")
         self.btn_edit_text_inline.clicked.connect(self.on_edit_text_clicked)
 
         self.btn_delete_text = QPushButton("🗑️ Delete")
-        self.btn_delete_text.setStyleSheet("background-color: #f38ba8; color: #11111b; font-weight: bold; border-radius: 4px; padding: 4px 10px;")
+        self.btn_delete_text.setStyleSheet("background-color: #ff79cb; color: #091222; font-weight: bold; border-radius: 4px; padding: 4px 10px;")
         self.btn_delete_text.clicked.connect(self.on_delete_selected_items)
 
         text_bar_hl.addWidget(lbl_text_title)
@@ -1731,11 +1782,11 @@ class ModernUI(QMainWindow):
         text_bar_hl.addWidget(lbl_opacity)
         text_bar_hl.addWidget(self.slider_opacity)
         text_bar_hl.addWidget(self.lbl_opacity_val)
-        text_bar_hl.addWidget(self.btn_copy_text)
-        text_bar_hl.addWidget(self.btn_paste_text)
-        text_bar_hl.addWidget(self.btn_dup_text)
-        text_bar_hl.addWidget(self.btn_edit_text_inline)
-        text_bar_hl.addWidget(self.btn_delete_text)
+        layer_hl.insertWidget(6, self.btn_copy_text)
+        layer_hl.insertWidget(7, self.btn_paste_text)
+        layer_hl.insertWidget(8, self.btn_dup_text)
+        layer_hl.insertWidget(9, self.btn_edit_text_inline)
+        layer_hl.insertWidget(10, self.btn_delete_text)
         text_bar_hl.addStretch()
         vl.addLayout(text_bar_hl)
 
@@ -1756,7 +1807,7 @@ class ModernUI(QMainWindow):
         vl.addLayout(nav_hl)
 
         self.draw_view = DroppableGraphicsView(self.load_canvas_file)
-        self.draw_view.setStyleSheet("background-color: #313244;")
+        self.draw_view.setStyleSheet("background-color: #182541;")
         vl.addWidget(self.draw_view)
 
         self.draw_scenes = {}
@@ -1802,7 +1853,7 @@ class ModernUI(QMainWindow):
         c = self.current_text_color
         bg_hex = c.name()
         text_hex = "#ffffff" if (c.red()*0.299 + c.green()*0.587 + c.blue()*0.114) < 128 else "#000000"
-        self.btn_text_color.setStyleSheet(f"background-color: {bg_hex}; color: {text_hex}; font-weight: bold; border: 1px solid #cdd6f4; border-radius: 4px; padding: 4px 10px;")
+        self.btn_text_color.setStyleSheet(f"background-color: {bg_hex}; color: {text_hex}; font-weight: bold; border: 1px solid #e3f2ff; border-radius: 4px; padding: 4px 10px;")
 
     def pick_text_color(self):
         c = QColorDialog.getColor(self.current_text_color, self, "Select Text Color")
@@ -1954,7 +2005,7 @@ class ModernUI(QMainWindow):
                 self.btn_text_underline.setChecked(f.underline())
                 self.btn_text_underline.blockSignals(False)
 
-                align = getattr(item, 'alignment', 'right')
+                align = getattr(item, 'alignment', 'left')
                 self.btn_align_right.blockSignals(True)
                 self.btn_align_center.blockSignals(True)
                 self.btn_align_left.blockSignals(True)
@@ -2003,7 +2054,7 @@ class ModernUI(QMainWindow):
             scene.text_italic = self.btn_text_italic.isChecked()
         if hasattr(self, 'btn_text_underline'):
             scene.text_underline = self.btn_text_underline.isChecked()
-        scene.text_alignment = getattr(self, 'current_text_alignment', 'right')
+        scene.text_alignment = getattr(self, 'current_text_alignment', 'left')
         scene.on_mode_change_cb = self.set_draw_mode
         scene.on_text_size_changed_cb = self.on_text_size_changed_from_scene
         scene.selectionChanged.connect(self.on_scene_selection_changed)
@@ -2012,20 +2063,20 @@ class ModernUI(QMainWindow):
     def set_draw_mode(self, mode):
         self.current_draw_mode = mode
         for btn in [self.btn_mode_select, self.btn_mode_draw, self.btn_mode_whiteout, self.btn_mode_rect, self.btn_mode_srect, self.btn_mode_text]:
-            btn.setStyleSheet("background-color: #45475a; color: #cdd6f4;")
+            btn.setStyleSheet("background-color: #233657; color: #e3f2ff;")
             
         if mode == 'select':
-            self.btn_mode_select.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+            self.btn_mode_select.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold;")
         elif mode == 'draw':
-            self.btn_mode_draw.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+            self.btn_mode_draw.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold;")
         elif mode == 'whiteout':
-            self.btn_mode_whiteout.setStyleSheet("background-color: #a6e3a1; color: #11111b; font-weight: bold; border: 2px solid #ffffff;")
+            self.btn_mode_whiteout.setStyleSheet("background-color: #97f5be; color: #091222; font-weight: bold; border: 2px solid #ffffff;")
         elif mode == 'rect':
-            self.btn_mode_rect.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+            self.btn_mode_rect.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold;")
         elif mode == 'solid_rect':
-            self.btn_mode_srect.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+            self.btn_mode_srect.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold;")
         elif mode == 'text':
-            self.btn_mode_text.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+            self.btn_mode_text.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold;")
 
         if hasattr(self, 'draw_view') and self.draw_view.scene():
             scene = self.draw_view.scene()
@@ -2060,6 +2111,8 @@ class ModernUI(QMainWindow):
             self.load_canvas_file(path)
 
     def load_canvas_file(self, path):
+        import pymupdf as fitz
+
         if not path or not os.path.exists(path): return
         
         self.draw_scenes = {}
@@ -2124,121 +2177,97 @@ class ModernUI(QMainWindow):
             self.draw_current_page -= 1
             self.update_draw_page_view()
 
-    def save_canvas(self):
-        out_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "PDF Files (*.pdf);;Images (*.png)")
-        if not out_path: return
-        
-        import numpy as np
-        from PIL import Image
-
-        if out_path.endswith('.pdf'):
-            if self.draw_doc:
-                out_doc = fitz.open(self.draw_pdf_path)
-                for i in range(len(out_doc)):
-                    if i in self.draw_scenes:
-                        scene_dict = self.draw_scenes[i]
-                        scene = scene_dict['scene']
-                        bg_item = scene_dict['bg_item']
-                        
-                        if hasattr(scene, 'brush_preview_item'):
-                            scene.brush_preview_item.hide()
-                        scene.is_saving = True
-                        scene.clearSelection()
-                        bg_item.hide()
-                        rect = scene.sceneRect()
-                        
-                        image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32_Premultiplied)
-                        image.fill(Qt.GlobalColor.transparent)
-                        
-                        from PyQt6.QtGui import QPainter
-                        painter = QPainter(image)
-                        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-                        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-                        scene.render(painter)
-                        painter.end()
-                        bg_item.show()
-                        scene.is_saving = False
-                        
-                        # Process overlay with clean un-premultiplication to eliminate dark fringes around white shapes
-                        ptr = image.bits()
-                        ptr.setsize(image.sizeInBytes())
-                        arr = np.array(ptr, copy=True).reshape((image.height(), image.width(), 4))
-                        
-                        alpha = arr[:, :, 3].astype(np.float32) / 255.0
-                        mask = (alpha > 0) & (alpha < 1.0)
-                        for c in range(3):
-                            arr[mask, c] = np.clip(np.round(arr[mask, c] / alpha[mask]), 0, 255)
-                        
-                        # Set fully transparent pixels to white so interpolation in PDF viewers never samples black!
-                        arr[alpha == 0, 0] = 255
-                        arr[alpha == 0, 1] = 255
-                        arr[alpha == 0, 2] = 255
-                        
-                        rgba_arr = np.empty_like(arr)
-                        rgba_arr[:, :, 0] = arr[:, :, 2] # R
-                        rgba_arr[:, :, 1] = arr[:, :, 1] # G
-                        rgba_arr[:, :, 2] = arr[:, :, 0] # B
-                        rgba_arr[:, :, 3] = arr[:, :, 3] # A
-                        
-                        temp_path = f"temp_draw_{i}.png"
-                        Image.fromarray(rgba_arr, mode='RGBA').save(temp_path)
-                        
-                        page = out_doc[i]
-                        page.insert_image(page.rect, filename=temp_path)
-                        if os.path.exists(temp_path):
-                            os.remove(temp_path)
-                        
-                out_doc.save(out_path)
-                out_doc.close()
-            else:
-                scene = self.draw_scenes[0]['scene']
-                if hasattr(scene, 'brush_preview_item'):
-                    scene.brush_preview_item.hide()
-                scene.is_saving = True
-                scene.clearSelection()
-                rect = scene.sceneRect()
-                image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
-                image.fill(QColor(255, 255, 255))
-                
-                from PyQt6.QtGui import QPainter
-                painter = QPainter(image)
-                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-                scene.render(painter)
-                painter.end()
-                scene.is_saving = False
-                
-                temp_path = "temp_canvas.png"
-                image.save(temp_path)
-                doc = fitz.open(); img = fitz.open(temp_path)
-                pdfbytes = img.convert_to_pdf(); img.close()
-                img_doc = fitz.open("pdf", pdfbytes)
-                page = doc.new_page(width=image.width(), height=image.height())
-                page.show_pdf_page(page.rect, img_doc, 0)
-                doc.save(out_path); doc.close()
-                if os.path.exists(temp_path):
-                    os.remove(temp_path)
-        else:
-            scene = self.draw_scenes[self.draw_current_page]['scene']
-            if hasattr(scene, 'brush_preview_item'):
-                scene.brush_preview_item.hide()
-            scene.is_saving = True
-            scene.clearSelection()
-            rect = scene.sceneRect()
-            image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
-            image.fill(QColor(255, 255, 255))
-            
-            from PyQt6.QtGui import QPainter
-            painter = QPainter(image)
-            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
-            scene.render(painter)
+    def render_canvas(self, scene, device):
+        preview_visible = scene.brush_preview_item.isVisible()
+        scene.brush_preview_item.hide()
+        scene.is_saving = True
+        scene.clearFocus()
+        scene.clearSelection()
+        painter = QPainter(device)
+        try:
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+            scene.render(painter, QRectF(0, 0, device.width(), device.height()))
+        finally:
             painter.end()
             scene.is_saving = False
-            image.save(out_path)
-            
-        self.show_msg("Success", "File saved successfully!")
+            scene.brush_preview_item.setVisible(preview_visible)
 
+    def add_canvas_overlay(self, page, scene, background):
+        import pymupdf
+
+        if not scene.get_user_items():
+            return
+        rect = scene.sceneRect()
+        data = QByteArray()
+        buffer = QBuffer(data)
+        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+        writer = QPdfWriter(buffer)
+        writer.setResolution(72)
+        writer.setPageSize(QPageSize(QSizeF(rect.width(), rect.height()), QPageSize.Unit.Point))
+        writer.setPageMargins(QMarginsF())
+        background.hide()
+        try:
+            self.render_canvas(scene, writer)
+        finally:
+            background.show()
+        del writer
+        buffer.close()
+
+        rotation = page.rotation
+        page.set_rotation(0)
+        try:
+            with pymupdf.open(stream=bytes(data), filetype="pdf") as overlay:
+                page.show_pdf_page(page.rect, overlay, rotate=rotation, keep_proportion=False)
+        finally:
+            page.set_rotation(rotation)
+
+    def save_canvas(self):
+        import pymupdf
+
+        if not self.draw_scenes:
+            self.show_msg("No File Open", "Open an image or PDF before saving.")
+            return
+        filters = "PDF Files (*.pdf);;PNG Images (*.png)"
+        out_path, selected_filter = QFileDialog.getSaveFileName(self, "Save File", "", filters)
+        if not out_path:
+            return
+        if not out_path.lower().endswith((".pdf", ".png")):
+            out_path += ".png" if selected_filter.startswith("PNG") else ".pdf"
+
+        try:
+            if out_path.lower().endswith(".pdf") and self.draw_doc:
+                if os.path.normcase(os.path.abspath(out_path)) == os.path.normcase(os.path.abspath(self.draw_pdf_path)):
+                    self.show_msg("Choose Another Filename", "Save your edited PDF as a new file.")
+                    return
+                with pymupdf.open(self.draw_pdf_path) as document:
+                    for index, entry in self.draw_scenes.items():
+                        self.add_canvas_overlay(document[index], entry["scene"], entry["bg_item"])
+                    document.save(out_path, garbage=3, deflate=True)
+            else:
+                scene = self.draw_scenes[self.draw_current_page]["scene"]
+                rect = scene.sceneRect()
+                image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_RGB32)
+                image.fill(Qt.GlobalColor.white)
+                self.render_canvas(scene, image)
+                if out_path.lower().endswith(".png"):
+                    if not image.save(out_path):
+                        raise OSError("Could not write PNG.")
+                else:
+                    data = QByteArray()
+                    buffer = QBuffer(data)
+                    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+                    if not image.save(buffer, "PNG"):
+                        raise OSError("Could not encode the edited image.")
+                    with pymupdf.open() as document:
+                        page = document.new_page(width=image.width(), height=image.height())
+                        page.insert_image(page.rect, stream=bytes(data))
+                        document.save(out_path, deflate=True)
+        except Exception as exc:
+            self.show_msg("Save Failed", str(exc))
+            return
+
+        self.show_msg("Success", "File saved successfully!")
 
     def create_annotation_widget(self):
         tab = QWidget()
@@ -2262,7 +2291,7 @@ class ModernUI(QMainWindow):
         btn_generate.clicked.connect(self.generate_numbering_data)
 
         btn_save = QPushButton("💾 3. Save Final PDF")
-        btn_save.setStyleSheet("background-color: #a6e3a1; color: #11111b;")
+        btn_save.setStyleSheet("background-color: #97f5be; color: #091222;")
         btn_save.clicked.connect(self.save_final_numbering)
 
         controls.addWidget(btn_load_pdf)
@@ -2299,7 +2328,7 @@ class ModernUI(QMainWindow):
 
         self.num_scene = QGraphicsScene()
         self.num_view = QGraphicsView(self.num_scene)
-        self.num_view.setStyleSheet("background-color: #313244;")
+        self.num_view.setStyleSheet("background-color: #182541;")
         layout.addWidget(self.num_view)
 
         self.num_text_item = None
@@ -2317,6 +2346,8 @@ class ModernUI(QMainWindow):
             self.generate_numbering_data() 
 
     def load_pdf_for_numbering(self, path=None):
+        import pymupdf as fitz
+
         if not path:
             path, _ = QFileDialog.getOpenFileName(self, "Select PDF", "", "PDF Files (*.pdf)")
         if path:
@@ -2411,6 +2442,8 @@ class ModernUI(QMainWindow):
         self.show_msg("Synced", "Position synced to all pages based on the current page's layout.")
 
     def save_final_numbering(self):
+        import pymupdf as fitz
+
         if not self.num_doc: return
         self.save_current_num_pos()
         in_path = self.loaded_pdf_path_for_num
@@ -2447,6 +2480,8 @@ class ModernUI(QMainWindow):
         self.run_background_task("Converting to Word (This takes time)...", work, lambda r: self.show_msg("Success", f"Word file saved to:\n{out_path}"))
 
     def pdf_to_images(self, path=None):
+        import pymupdf as fitz
+
         pdf_path = path or QFileDialog.getOpenFileName(self, "Select PDF", "", "PDF Files (*.pdf)")[0]
         if not pdf_path: return
         dir_name = os.path.dirname(os.path.abspath(pdf_path))
@@ -2469,6 +2504,8 @@ class ModernUI(QMainWindow):
         self.run_background_task("Extracting Images...", work, lambda total: self.show_msg("Success", f"Extracted {total} images into:\n{out_dir}"))
 
     def pdf_to_pages(self, path=None):
+        import pymupdf as fitz
+
         if not path or not isinstance(path, str):
             path, _ = QFileDialog.getOpenFileName(self, "Select PDF to Convert into Pages", "", "PDF Files (*.pdf)")
         if not path or not os.path.exists(path):
@@ -2515,6 +2552,8 @@ class ModernUI(QMainWindow):
         self.run_background_task("Converting PDF to Separate Pages...", work, on_success)
 
     def word_to_pages(self, path=None):
+        import pymupdf as fitz
+
         if not path or not isinstance(path, str):
             path, _ = QFileDialog.getOpenFileName(self, "Select Word Document to Convert into Pages", "", "Word Documents (*.docx *.doc)")
         if not path or not os.path.exists(path):
@@ -2710,10 +2749,11 @@ class ModernUI(QMainWindow):
         btn_load.clicked.connect(lambda *a: self.load_pdf_for_rotate())
 
         self.lbl_rotate_info = QLabel("Open or drop a PDF to view and rotate pages.")
-        self.lbl_rotate_info.setStyleSheet("color: #a6adc8; font-weight: 500;")
+        self.lbl_rotate_info.setWordWrap(True)
+        self.lbl_rotate_info.setStyleSheet("color: #a6beda; font-weight: 500;")
 
         btn_save = QPushButton("💾 2. Save Rotated PDF")
-        btn_save.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold; padding: 10px 18px;")
+        btn_save.setStyleSheet("background-color: #54efff; color: #091222; font-weight: bold; padding: 10px 18px;")
         btn_save.clicked.connect(self.save_rotated_pdf)
 
         control_hl.addWidget(btn_load)
@@ -2730,9 +2770,10 @@ class ModernUI(QMainWindow):
 
         self.scroll_rotate = QScrollArea()
         self.scroll_rotate.setWidgetResizable(True)
-        self.scroll_rotate.setStyleSheet("background-color: #181825; border: 1px solid #313244; border-radius: 6px;")
+        self.scroll_rotate.setStyleSheet("background-color: #10192d; border: 1px solid #182541; border-radius: 6px;")
 
         self.lbl_rotate_preview = QLabel("Drag & drop a PDF file here or click Open above to view and rotate.")
+        self.lbl_rotate_preview.setWordWrap(True)
         self.lbl_rotate_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.lbl_rotate_preview.setStyleSheet("color: #6c7086; font-size: 14px; padding: 20px;")
         self.scroll_rotate.setWidget(self.lbl_rotate_preview)
@@ -2744,13 +2785,13 @@ class ModernUI(QMainWindow):
         btn_prev.clicked.connect(self.prev_rotate_page)
 
         self.lbl_rotate_page = QLabel("Page 0 / 0")
-        self.lbl_rotate_page.setStyleSheet("font-weight: bold; color: #cdd6f4; font-size: 13px;")
+        self.lbl_rotate_page.setStyleSheet("font-weight: bold; color: #e3f2ff; font-size: 13px;")
 
         btn_next = QPushButton("Next Page ▶")
         btn_next.clicked.connect(self.next_rotate_page)
 
         self.lbl_rotate_angle = QLabel("Orientation: 0°")
-        self.lbl_rotate_angle.setStyleSheet("background-color: #313244; color: #a6e3a1; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+        self.lbl_rotate_angle.setStyleSheet("background-color: #182541; color: #97f5be; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
 
         nav_hl.addWidget(btn_prev)
         nav_hl.addStretch()
@@ -2768,11 +2809,11 @@ class ModernUI(QMainWindow):
 
         # Scope Selection
         lbl_scope = QLabel("📌 Apply Rotation To:")
-        lbl_scope.setStyleSheet("font-weight: bold; color: #89b4fa;")
+        lbl_scope.setStyleSheet("font-weight: bold; color: #54efff;")
         ctrl_vl.addWidget(lbl_scope)
 
-        self.radio_rot_all = QRadioButton("All Pages (جميع صفحات الملف)")
-        self.radio_rot_current = QRadioButton("Current Page Only (الصفحة الحالية فقط)")
+        self.radio_rot_all = QRadioButton("All Pages")
+        self.radio_rot_current = QRadioButton("Current Page Only")
         self.radio_rot_all.setChecked(True)
         ctrl_vl.addWidget(self.radio_rot_all)
         ctrl_vl.addWidget(self.radio_rot_current)
@@ -2781,23 +2822,23 @@ class ModernUI(QMainWindow):
 
         # Rotation Buttons
         lbl_actions = QLabel("🔄 Choose Rotation Direction:")
-        lbl_actions.setStyleSheet("font-weight: bold; color: #89b4fa;")
+        lbl_actions.setStyleSheet("font-weight: bold; color: #54efff;")
         ctrl_vl.addWidget(lbl_actions)
 
         btn_cw = QPushButton("⟳ Rotate 90° Right (Clockwise)")
-        btn_cw.setStyleSheet("background-color: #a6e3a1; color: #11111b; font-weight: bold; font-size: 13px; padding: 12px;")
+        btn_cw.setStyleSheet("background-color: #97f5be; color: #091222; font-weight: bold; font-size: 13px; padding: 12px;")
         btn_cw.clicked.connect(lambda: self.apply_rotation(90))
 
         btn_ccw = QPushButton("⟲ Rotate 90° Left (Counter-Clockwise)")
-        btn_ccw.setStyleSheet("background-color: #74c7ec; color: #11111b; font-weight: bold; font-size: 13px; padding: 12px;")
+        btn_ccw.setStyleSheet("background-color: #74c7ec; color: #091222; font-weight: bold; font-size: 13px; padding: 12px;")
         btn_ccw.clicked.connect(lambda: self.apply_rotation(-90))
 
         btn_180 = QPushButton("🔄 Flip 180° (Upside Down)")
-        btn_180.setStyleSheet("background-color: #fab387; color: #11111b; font-weight: bold; font-size: 13px; padding: 12px;")
+        btn_180.setStyleSheet("background-color: #fab387; color: #091222; font-weight: bold; font-size: 13px; padding: 12px;")
         btn_180.clicked.connect(lambda: self.apply_rotation(180))
 
         btn_reset = QPushButton("↺ Reset to Original Rotation")
-        btn_reset.setStyleSheet("background-color: #45475a; color: #cdd6f4; font-weight: bold; font-size: 12px; padding: 8px;")
+        btn_reset.setStyleSheet("background-color: #233657; color: #e3f2ff; font-weight: bold; font-size: 12px; padding: 8px;")
         btn_reset.clicked.connect(self.reset_rotation)
 
         ctrl_vl.addWidget(btn_cw)
@@ -2811,6 +2852,7 @@ class ModernUI(QMainWindow):
             "💡 Tip: Rotations are 100% lossless!\n"
             "Vector text, fonts, and images are preserved with zero re-compression."
         )
+        lbl_hint.setWordWrap(True)
         lbl_hint.setStyleSheet("color: #6c7086; font-size: 11px; line-height: 1.3;")
         ctrl_vl.addWidget(lbl_hint)
 
@@ -2829,6 +2871,8 @@ class ModernUI(QMainWindow):
         return tab
 
     def load_pdf_for_rotate(self, path=None):
+        import pymupdf as fitz
+
         if not path or not isinstance(path, str):
             path, _ = QFileDialog.getOpenFileName(self, "Select PDF to Rotate", "", "PDF Files (*.pdf)")
         if not path or not os.path.exists(path):
@@ -2912,6 +2956,8 @@ class ModernUI(QMainWindow):
         self.update_rotate_preview()
 
     def save_rotated_pdf(self):
+        import pymupdf as fitz
+
         if not self.rotate_doc or not self.rotate_pdf_path:
             self.show_msg("Notice", "Please load a PDF to rotate first.")
             return
@@ -3001,14 +3047,15 @@ class ModernUI(QMainWindow):
         
         self.btn_load_comp = DropButton("📂 Open PDF to Compress (Drag & Drop Supported)", self.load_compress_file)
         self.lbl_compress_info = QLabel("No PDF selected. Drag & Drop or click the button above.")
-        self.lbl_compress_info.setStyleSheet("color: #a6adc8; font-size: 13px; padding: 5px;")
+        self.lbl_compress_info.setWordWrap(True)
+        self.lbl_compress_info.setStyleSheet("color: #a6beda; font-size: 13px; padding: 5px;")
         
         hl_file.addWidget(self.btn_load_comp)
         hl_file.addWidget(self.lbl_compress_info)
         layout.addWidget(grp_file)
 
         # 2. Compression Mode & Resolution Group
-        grp_modes = QGroupBox("⚙️ 2. Compression Quality & DPI Slider (تحكم نسبة الضغط وجودة الصفحات)")
+        grp_modes = QGroupBox("⚙️ 2. Compression Quality & DPI Slider")
         vl_modes = QVBoxLayout(grp_modes)
 
         # Mode Selection: Smart Resample (DPI Slider) vs Pure Lossless Squeeze
@@ -3029,7 +3076,8 @@ class ModernUI(QMainWindow):
 
         # Dynamic label showing current DPI value and description
         self.lbl_slider_dpi_val = QLabel("🎯 Target Resolution: 100 DPI ⭐ (Default)  (Recommended — Best balance of small size and clear text)")
-        self.lbl_slider_dpi_val.setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 13px; padding: 2px;")
+        self.lbl_slider_dpi_val.setWordWrap(True)
+        self.lbl_slider_dpi_val.setStyleSheet("color: #97f5be; font-weight: bold; font-size: 13px; padding: 2px;")
         vl_slider.addWidget(self.lbl_slider_dpi_val)
 
         # Interactive Slider
@@ -3039,10 +3087,10 @@ class ModernUI(QMainWindow):
         self.slider_dpi.setTickPosition(QSlider.TickPosition.TicksBelow)
         self.slider_dpi.setTickInterval(25)
         self.slider_dpi.setStyleSheet("""
-            QSlider::groove:horizontal { height: 8px; background: #313244; border-radius: 4px; }
-            QSlider::sub-page:horizontal { background: #89b4fa; border-radius: 4px; }
-            QSlider::handle:horizontal { background: #cdd6f4; border: 2px solid #89b4fa; width: 18px; margin: -5px 0; border-radius: 9px; }
-            QSlider::handle:horizontal:hover { background: #a6e3a1; border-color: #a6e3a1; }
+            QSlider::groove:horizontal { height: 8px; background: #182541; border-radius: 4px; }
+            QSlider::sub-page:horizontal { background: #54efff; border-radius: 4px; }
+            QSlider::handle:horizontal { background: #e3f2ff; border: 2px solid #54efff; width: 18px; margin: -5px 0; border-radius: 9px; }
+            QSlider::handle:horizontal:hover { background: #97f5be; border-color: #97f5be; }
         """)
         self.slider_dpi.valueChanged.connect(self.on_dpi_slider_changed)
         vl_slider.addWidget(self.slider_dpi)
@@ -3050,7 +3098,7 @@ class ModernUI(QMainWindow):
         # Quick preset buttons row
         hl_presets = QHBoxLayout()
         lbl_quick = QLabel("⚡ Quick Presets:")
-        lbl_quick.setStyleSheet("color: #89b4fa; font-weight: bold; font-size: 12px;")
+        lbl_quick.setStyleSheet("color: #54efff; font-weight: bold; font-size: 12px;")
         hl_presets.addWidget(lbl_quick)
 
         presets = [
@@ -3087,13 +3135,13 @@ class ModernUI(QMainWindow):
 
         # 4. Action Button & Results
         self.btn_run_compress = QPushButton("🗜️ Compress PDF Now")
-        self.btn_run_compress.setStyleSheet("background-color: #a6e3a1; color: #11111b; font-size: 15px; padding: 12px; font-weight: bold;")
+        self.btn_run_compress.setStyleSheet("background-color: #97f5be; color: #091222; font-size: 15px; padding: 12px; font-weight: bold;")
         self.btn_run_compress.clicked.connect(self.compress_pdf_advanced)
         layout.addWidget(self.btn_run_compress)
 
         self.lbl_compress_result = QLabel("")
         self.lbl_compress_result.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.lbl_compress_result.setStyleSheet("color: #89b4fa; font-size: 14px; font-weight: bold; padding: 10px;")
+        self.lbl_compress_result.setStyleSheet("color: #54efff; font-size: 14px; font-weight: bold; padding: 10px;")
         layout.addWidget(self.lbl_compress_result)
 
         layout.addStretch()
@@ -3103,19 +3151,19 @@ class ModernUI(QMainWindow):
     def on_dpi_slider_changed(self, val):
         if val <= 72:
             desc = "Maximum Compression — Smallest file size for mobile/email"
-            color = "#f38ba8"
+            color = "#ff79cb"
         elif val <= 90:
             desc = "High Compression — Very compact file size with good readability"
             color = "#fab387"
         elif val == 100:
             desc = "Recommended Default — Best balance of small size and clear text"
-            color = "#a6e3a1"
+            color = "#97f5be"
         elif val <= 120:
             desc = "Sharp & Efficient — Lightweight with enhanced text sharpness"
-            color = "#89dceb"
+            color = "#54efff"
         elif val <= 150:
             desc = "Balanced — Ideal for ebooks and sharp screen viewing"
-            color = "#89b4fa"
+            color = "#54efff"
         elif val <= 200:
             desc = "Crisp — Extra sharpness for detailed graphics"
             color = "#b4befe"
@@ -3143,7 +3191,7 @@ class ModernUI(QMainWindow):
         else:
             size_str = f"{size_bytes / 1024:.1f} KB"
         self.lbl_compress_info.setText(f"📄 Loaded: {os.path.basename(path)}  |  Original Size: {size_str}")
-        self.lbl_compress_info.setStyleSheet("color: #a6e3a1; font-weight: bold; font-size: 13px; padding: 5px;")
+        self.lbl_compress_info.setStyleSheet("color: #97f5be; font-weight: bold; font-size: 13px; padding: 5px;")
         self.lbl_compress_result.setText("")
 
     def compress_pdf_advanced(self):
@@ -3262,6 +3310,7 @@ if __name__ == "__main__":
         except:
             pass
     app = QApplication(sys.argv)
+    app.setLayoutDirection(Qt.LayoutDirection.LeftToRight)
     
     # Set application icon globally
     icon_path = os.path.join(getattr(sys, '_MEIPASS', os.path.dirname(os.path.abspath(__file__))), "engine pdf.ico")
