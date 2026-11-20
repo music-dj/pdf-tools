@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import (
     QMessageBox, QGraphicsView, QGraphicsScene, QGraphicsPathItem,
     QGraphicsTextItem, QGraphicsRectItem, QInputDialog, QFontDialog, QGroupBox, QGridLayout,
     QListWidgetItem, QScrollArea, QCheckBox, QGraphicsItem, QProgressDialog, QSlider,
-    QFontComboBox, QButtonGroup
+    QFontComboBox, QButtonGroup, QGraphicsEllipseItem, QMenu
 )
 from PyQt6.QtCore import Qt, QPointF, QSize, QRectF, QThread, pyqtSignal
 from PyQt6.QtGui import QPen, QColor, QPainterPath, QPixmap, QImage, QIcon, QFont, QBrush, QTextCursor, QTextBlockFormat
@@ -25,6 +25,12 @@ class DroppableGraphicsView(QGraphicsView):
         self.setAcceptDrops(True)
         self.on_file_dropped = on_file_dropped_callback
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
+        self.setMouseTracking(True)
+
+    def leaveEvent(self, event):
+        if self.scene() and hasattr(self.scene(), 'brush_preview_item'):
+            self.scene().brush_preview_item.hide()
+        super().leaveEvent(event)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -393,9 +399,21 @@ class InteractiveScene(QGraphicsScene):
         self.current_path_item = None
         self.current_path = QPainterPath()
         self.current_rect_item = None
-        self.pen = QPen(QColor("red"), 3, Qt.PenStyle.SolidLine)
+        self.pen_size = 6
+        self.pen = QPen(QColor("red"), self.pen_size, Qt.PenStyle.SolidLine)
+        self.pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        self.pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         self.mode = "select" 
         self.is_saving = False
+
+        # Live Brush Circle Preview Item
+        self.brush_preview_item = QGraphicsEllipseItem()
+        self.brush_preview_item.setPen(QPen(QColor(50, 50, 50, 220), 1, Qt.PenStyle.DashLine))
+        self.brush_preview_item.setBrush(QBrush(QColor(255, 255, 255, 50)))
+        self.brush_preview_item.setZValue(9999999)
+        self.brush_preview_item.setAcceptedMouseButtons(Qt.MouseButton.NoButton)
+        self.brush_preview_item.hide()
+        self.addItem(self.brush_preview_item)
 
         # Undo / Redo stacks
         self.undo_stack = []
@@ -410,6 +428,57 @@ class InteractiveScene(QGraphicsScene):
         self.text_underline = False
         self.on_mode_change_cb = None
         self.on_text_size_changed_cb = None
+
+    def get_user_items(self):
+        items = []
+        for it in self.items():
+            if it != getattr(self, 'brush_preview_item', None) and getattr(it, 'zValue', lambda: 0)() > -9000:
+                items.append(it)
+        return items
+
+    def bring_to_front(self):
+        selected = [it for it in self.selectedItems() if it in self.get_user_items()]
+        if not selected:
+            return
+        all_items = self.get_user_items()
+        max_z = max([it.zValue() for it in all_items], default=0)
+        for it in selected:
+            old_z = it.zValue()
+            new_z = max_z + 1
+            it.setZValue(new_z)
+            self.push_undo_action({'type': 'z_order', 'item': it, 'old_z': old_z, 'new_z': new_z})
+
+    def send_to_back(self):
+        selected = [it for it in self.selectedItems() if it in self.get_user_items()]
+        if not selected:
+            return
+        all_items = self.get_user_items()
+        min_z = min([it.zValue() for it in all_items], default=0)
+        for it in selected:
+            old_z = it.zValue()
+            new_z = max(-100, min_z - 1)
+            it.setZValue(new_z)
+            self.push_undo_action({'type': 'z_order', 'item': it, 'old_z': old_z, 'new_z': new_z})
+
+    def move_forward_one_step(self):
+        selected = [it for it in self.selectedItems() if it in self.get_user_items()]
+        if not selected:
+            return
+        for it in selected:
+            old_z = it.zValue()
+            new_z = old_z + 1
+            it.setZValue(new_z)
+            self.push_undo_action({'type': 'z_order', 'item': it, 'old_z': old_z, 'new_z': new_z})
+
+    def move_backward_one_step(self):
+        selected = [it for it in self.selectedItems() if it in self.get_user_items()]
+        if not selected:
+            return
+        for it in selected:
+            old_z = it.zValue()
+            new_z = max(-100, old_z - 1)
+            it.setZValue(new_z)
+            self.push_undo_action({'type': 'z_order', 'item': it, 'old_z': old_z, 'new_z': new_z})
 
     def push_undo_action(self, action):
         self.undo_stack.append(action)
@@ -429,6 +498,9 @@ class InteractiveScene(QGraphicsScene):
             if item and item.scene() != self:
                 self.addItem(item)
                 item.setSelected(True)
+        elif act_type == 'z_order':
+            if item:
+                item.setZValue(action['old_z'])
 
     def redo(self):
         if not self.redo_stack:
@@ -444,6 +516,9 @@ class InteractiveScene(QGraphicsScene):
         elif act_type == 'remove':
             if item and item.scene() == self:
                 self.removeItem(item)
+        elif act_type == 'z_order':
+            if item:
+                item.setZValue(action['new_z'])
 
     def copy_selected(self):
         selected = [it for it in self.selectedItems() if isinstance(it, ResizableTextItem)]
@@ -469,7 +544,7 @@ class InteractiveScene(QGraphicsScene):
         new_item.setOpacity(data.get('opacity', 1.0))
         new_pos = data['pos'] + QPointF(25, 25)
         new_item.setPos(new_pos)
-        data['pos'] = new_pos  # cascade subsequent pastes
+        data['pos'] = new_pos
         new_item.on_size_changed_callback = self.on_text_size_changed_cb
         self.addItem(new_item)
         self.push_undo_action({'type': 'add', 'item': new_item})
@@ -486,19 +561,31 @@ class InteractiveScene(QGraphicsScene):
             self.current_path = QPainterPath()
             self.current_path.moveTo(event.scenePos())
             self.current_path_item = QGraphicsPathItem(self.current_path)
+            self.pen.setWidth(self.pen_size)
+            self.pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            self.pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
             self.current_path_item.setPen(self.pen)
             self.current_path_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             self.current_path_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
             self.addItem(self.current_path_item)
 
-        elif self.mode in ["rect", "solid_rect"]:
+        elif self.mode in ["rect", "solid_rect", "whiteout"]:
             self.drawing = True
             self.start_point = event.scenePos()
             self.current_rect_item = QGraphicsRectItem(QRectF(self.start_point, self.start_point))
-            self.current_rect_item.setPen(self.pen)
             
-            if self.mode == "solid_rect":
+            if self.mode == "whiteout":
+                # Pure white fill with NO BORDER for clean masking/erasing
+                self.current_rect_item.setPen(QPen(Qt.PenStyle.NoPen))
+                self.current_rect_item.setBrush(QBrush(QColor(255, 255, 255)))
+            elif self.mode == "solid_rect":
+                # Solid fill in current draw color with NO border
+                self.current_rect_item.setPen(QPen(Qt.PenStyle.NoPen))
                 self.current_rect_item.setBrush(QBrush(self.pen.color()))
+            else:
+                # Outline rect
+                self.current_rect_item.setPen(self.pen)
+                self.current_rect_item.setBrush(Qt.BrushStyle.NoBrush)
                 
             self.current_rect_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
             self.current_rect_item.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsMovable, True)
@@ -530,11 +617,22 @@ class InteractiveScene(QGraphicsScene):
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event):
+        # Update live brush circle preview
+        if self.mode == "draw" and not self.is_saving:
+            r = self.pen_size / 2.0
+            p = event.scenePos()
+            self.brush_preview_item.setRect(p.x() - r, p.y() - r, float(self.pen_size), float(self.pen_size))
+            if not self.brush_preview_item.isVisible():
+                self.brush_preview_item.show()
+        else:
+            if hasattr(self, 'brush_preview_item') and self.brush_preview_item.isVisible():
+                self.brush_preview_item.hide()
+
         if self.mode == "draw" and self.drawing and self.current_path_item:
             self.current_path.lineTo(event.scenePos())
             self.current_path_item.setPath(self.current_path)
 
-        elif self.mode in ["rect", "solid_rect"] and self.drawing and self.current_rect_item:
+        elif self.mode in ["rect", "solid_rect", "whiteout"] and self.drawing and self.current_rect_item:
             p2 = event.scenePos()
             self.current_rect_item.setRect(QRectF(self.start_point, p2).normalized())
 
@@ -551,8 +649,45 @@ class InteractiveScene(QGraphicsScene):
             self.current_rect_item = None
         super().mouseReleaseEvent(event)
 
+    def contextMenuEvent(self, event):
+        item = self.itemAt(event.scenePos(), self.views()[0].transform() if self.views() else None)
+        if item and item != getattr(self, 'brush_preview_item', None) and getattr(item, 'zValue', lambda: 0)() > -9000:
+            if not item.isSelected():
+                self.clearSelection()
+                item.setSelected(True)
+            menu = QMenu()
+            menu.setStyleSheet("QMenu { background-color: #313244; color: #cdd6f4; border: 1px solid #45475a; } QMenu::item:selected { background-color: #89b4fa; color: #11111b; font-weight: bold; }")
+            act_front = menu.addAction("⏫ Bring to Front (أعلى طبقة)")
+            act_forward = menu.addAction("🔼 Move Forward (تقديم خطوة)")
+            act_backward = menu.addAction("🔽 Move Backward (تأخير خطوة)")
+            act_back = menu.addAction("⏬ Send to Back (أسفل طبقة)")
+            menu.addSeparator()
+            act_copy = menu.addAction("📋 Copy (نسخ)")
+            act_dup = menu.addAction("📑 Duplicate (مضاعفة)")
+            act_del = menu.addAction("🗑️ Delete (حذف)")
+
+            action = menu.exec(event.screenPos())
+            if action == act_front:
+                self.bring_to_front()
+            elif action == act_forward:
+                self.move_forward_one_step()
+            elif action == act_backward:
+                self.move_backward_one_step()
+            elif action == act_back:
+                self.send_to_back()
+            elif action == act_copy:
+                self.copy_selected()
+            elif action == act_dup:
+                self.duplicate_selected()
+            elif action == act_del:
+                for it in self.selectedItems():
+                    if not getattr(it, 'is_editing', False):
+                        self.push_undo_action({'type': 'remove', 'item': it})
+                        self.removeItem(it)
+            return
+        super().contextMenuEvent(event)
+
     def keyPressEvent(self, event):
-        # If an item is being edited or has focus, let it handle the key directly
         focus_item = self.focusItem()
         if focus_item and (getattr(focus_item, 'is_editing', False) or 
                            focus_item.textInteractionFlags() != Qt.TextInteractionFlag.NoTextInteraction):
@@ -562,32 +697,26 @@ class InteractiveScene(QGraphicsScene):
         ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
         shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
 
-        # Undo: Ctrl+Z
         if ctrl and not shift and event.key() == Qt.Key.Key_Z:
             self.undo()
             return
 
-        # Redo: Ctrl+Y or Ctrl+Shift+Z
         if (ctrl and event.key() == Qt.Key.Key_Y) or (ctrl and shift and event.key() == Qt.Key.Key_Z):
             self.redo()
             return
 
-        # Copy: Ctrl+C
         if ctrl and event.key() == Qt.Key.Key_C:
             self.copy_selected()
             return
 
-        # Paste: Ctrl+V
         if ctrl and event.key() == Qt.Key.Key_V:
             self.paste()
             return
 
-        # Duplicate: Ctrl+D
         if ctrl and event.key() == Qt.Key.Key_D:
             self.duplicate_selected()
             return
 
-        # NEVER delete on Backspace! Only delete selected items on the Delete key when not editing
         if event.key() == Qt.Key.Key_Delete:
             for item in self.selectedItems():
                 if not getattr(item, 'is_editing', False):
@@ -596,7 +725,6 @@ class InteractiveScene(QGraphicsScene):
             return
 
         super().keyPressEvent(event)
-
 
 
 class GenericWorker(QThread):
@@ -621,7 +749,7 @@ class GenericWorker(QThread):
 class ModernUI(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("PDF Master Pro V3.2.1")
+        self.setWindowTitle("PDF Master Pro V3.3.0")
         self.setGeometry(100, 100, 1180, 820)
         
         # Set Window and Taskbar Icon
@@ -1387,21 +1515,61 @@ class ModernUI(QMainWindow):
         btn_load = QPushButton("📂 Load Image / PDF")
         btn_load.clicked.connect(self.load_canvas_dialog)
         
-        self.btn_mode_select = QPushButton("↖️ Cursor (Move/Del)")
+        self.btn_mode_select = QPushButton("↖️ Select")
         self.btn_mode_draw = QPushButton("🖋️ Pen")
+        self.btn_mode_whiteout = QPushButton("⬜ Whiteout (طمس أبيض)")
+        self.btn_mode_whiteout.setToolTip("Pure white borderless box to cover/redact words (مربع تبييض أبيض بدون إطار)")
+        self.btn_mode_whiteout.setStyleSheet("background-color: #ffffff; color: #11111b; font-weight: bold; border-radius: 4px; padding: 4px 10px;")
+        
         self.btn_mode_rect = QPushButton("🔲 Rect (Outline)")
         self.btn_mode_srect = QPushButton("⬛ Rect (Solid)")
         self.btn_mode_text = QPushButton("🔤 Text")
         
-        btn_color = QPushButton("🎨 Color")
-        btn_color.setStyleSheet("background-color: #f9e2af; color: #11111b;")
-        btn_color.clicked.connect(self.pick_draw_color)
+        self.btn_draw_color = QPushButton("🎨 Color")
+        self.btn_draw_color.setStyleSheet("background-color: #f9e2af; color: #11111b; font-weight: bold;")
+        self.btn_draw_color.clicked.connect(self.pick_draw_color)
+
+        lbl_pen_size = QLabel("Brush:")
+        lbl_pen_size.setStyleSheet("color: #a6adc8; margin-left: 4px;")
+        self.spin_pen_size = QSpinBox()
+        self.spin_pen_size.setRange(1, 150)
+        self.spin_pen_size.setValue(6)
+        self.spin_pen_size.setSuffix(" px")
+        self.spin_pen_size.setToolTip("Adjust Pen / Brush Size (حجم القلم أو الفرشاة)")
+        self.spin_pen_size.setStyleSheet("background-color: #45475a; color: #cdd6f4; padding: 4px; border-radius: 4px;")
+        self.spin_pen_size.valueChanged.connect(self.on_pen_size_changed)
+
+        # Layer Ordering Controls
+        lbl_layers = QLabel("Layers:")
+        lbl_layers.setStyleSheet("color: #a6adc8; margin-left: 6px;")
+        
+        btn_layer_front = QPushButton("⏫ Top")
+        btn_layer_front.setToolTip("Bring to Front (نقل للأمام تماماً فوق كل العناصر)")
+        btn_layer_front.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_layer_front.clicked.connect(self.on_bring_to_front)
+
+        btn_layer_forward = QPushButton("🔼 Up")
+        btn_layer_forward.setToolTip("Move Forward One Step (تقديم خطوة للأمام)")
+        btn_layer_forward.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_layer_forward.clicked.connect(self.on_move_forward)
+
+        btn_layer_backward = QPushButton("🔽 Down")
+        btn_layer_backward.setToolTip("Move Backward One Step (تأخير خطوة للخلف)")
+        btn_layer_backward.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_layer_backward.clicked.connect(self.on_move_backward)
+
+        btn_layer_back = QPushButton("⏬ Bottom")
+        btn_layer_back.setToolTip("Send to Back (نقل للخلف تحت العناصر)")
+        btn_layer_back.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
+        btn_layer_back.clicked.connect(self.on_send_to_back)
         
         self.current_draw_mode = 'select'
         self.current_draw_color = QColor("red")
+        self.current_pen_size = 6
 
         self.btn_mode_select.clicked.connect(lambda: self.set_draw_mode('select'))
         self.btn_mode_draw.clicked.connect(lambda: self.set_draw_mode('draw'))
+        self.btn_mode_whiteout.clicked.connect(lambda: self.set_draw_mode('whiteout'))
         self.btn_mode_rect.clicked.connect(lambda: self.set_draw_mode('rect'))
         self.btn_mode_srect.clicked.connect(lambda: self.set_draw_mode('solid_rect'))
         self.btn_mode_text.clicked.connect(lambda: self.set_draw_mode('text'))
@@ -1417,16 +1585,24 @@ class ModernUI(QMainWindow):
         btn_redo.clicked.connect(self.on_redo_clicked)
         
         btn_save_canvas = QPushButton("💾 Save File")
-        btn_save_canvas.setStyleSheet("background-color: #89dceb; color: #11111b;")
+        btn_save_canvas.setStyleSheet("background-color: #89dceb; color: #11111b; font-weight: bold;")
         btn_save_canvas.clicked.connect(self.save_canvas)
         
         tools_hl.addWidget(btn_load)
         tools_hl.addWidget(self.btn_mode_select)
         tools_hl.addWidget(self.btn_mode_draw)
+        tools_hl.addWidget(self.btn_mode_whiteout)
         tools_hl.addWidget(self.btn_mode_rect)
         tools_hl.addWidget(self.btn_mode_srect)
         tools_hl.addWidget(self.btn_mode_text)
-        tools_hl.addWidget(btn_color)
+        tools_hl.addWidget(self.btn_draw_color)
+        tools_hl.addWidget(lbl_pen_size)
+        tools_hl.addWidget(self.spin_pen_size)
+        tools_hl.addWidget(lbl_layers)
+        tools_hl.addWidget(btn_layer_front)
+        tools_hl.addWidget(btn_layer_forward)
+        tools_hl.addWidget(btn_layer_backward)
+        tools_hl.addWidget(btn_layer_back)
         tools_hl.addWidget(btn_undo)
         tools_hl.addWidget(btn_redo)
         tools_hl.addWidget(btn_save_canvas)
@@ -1446,12 +1622,12 @@ class ModernUI(QMainWindow):
         lbl_size.setStyleSheet("color: #a6adc8;")
         self.spin_font_size = QSpinBox()
         self.spin_font_size.setRange(6, 144)
-        self.spin_font_size.setValue(12)  # Default 12 pt as requested
+        self.spin_font_size.setValue(12)
         self.spin_font_size.setSuffix(" pt")
         self.spin_font_size.setStyleSheet("background-color: #45475a; color: #cdd6f4; padding: 4px; border-radius: 4px;")
         self.spin_font_size.valueChanged.connect(self.on_text_font_size_changed)
 
-        self.current_text_color = QColor(0, 0, 0)  # Default Black as requested
+        self.current_text_color = QColor(0, 0, 0)
         self.btn_text_color = QPushButton("⬛ Color")
         self.update_text_color_button_style()
         self.btn_text_color.clicked.connect(self.pick_text_color)
@@ -1477,7 +1653,6 @@ class ModernUI(QMainWindow):
         self.btn_text_underline.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px;")
         self.btn_text_underline.toggled.connect(self.on_text_underline_toggled)
 
-        # Text Alignment buttons
         lbl_align = QLabel("Align:")
         lbl_align.setStyleSheet("color: #a6adc8; margin-left: 6px;")
 
@@ -1506,7 +1681,6 @@ class ModernUI(QMainWindow):
         self.align_group.addButton(self.btn_align_left)
         self.current_text_alignment = 'right'
 
-        # Opacity / Transparency control
         lbl_opacity = QLabel("Opacity:")
         lbl_opacity.setStyleSheet("color: #a6adc8; margin-left: 6px;")
         self.slider_opacity = QSlider(Qt.Orientation.Horizontal)
@@ -1518,7 +1692,6 @@ class ModernUI(QMainWindow):
         self.lbl_opacity_val = QLabel("100%")
         self.lbl_opacity_val.setStyleSheet("color: #89b4fa; font-size: 11px; min-width: 32px;")
 
-        # Copy / Paste / Duplicate buttons
         self.btn_copy_text = QPushButton("📋 Copy")
         self.btn_copy_text.setToolTip("Copy selected text box (Ctrl+C)")
         self.btn_copy_text.setStyleSheet("background-color: #45475a; color: #cdd6f4; border-radius: 4px; padding: 4px 8px;")
@@ -1582,7 +1755,6 @@ class ModernUI(QMainWindow):
         nav_hl.addStretch()
         vl.addLayout(nav_hl)
 
-        # Uses DroppableGraphicsView so images/PDFs can be dropped directly onto the canvas
         self.draw_view = DroppableGraphicsView(self.load_canvas_file)
         self.draw_view.setStyleSheet("background-color: #313244;")
         vl.addWidget(self.draw_view)
@@ -1593,6 +1765,38 @@ class ModernUI(QMainWindow):
         self.draw_pdf_path = None
 
         return tab
+
+    def on_pen_size_changed(self, size):
+        self.current_pen_size = size
+        if hasattr(self, 'draw_view') and self.draw_view.scene():
+            scene = self.draw_view.scene()
+            scene.pen_size = size
+            scene.pen.setWidth(size)
+            for it in scene.selectedItems():
+                if isinstance(it, QGraphicsPathItem):
+                    p = it.pen()
+                    p.setWidth(size)
+                    it.setPen(p)
+                elif isinstance(it, QGraphicsRectItem) and it.brush().style() == Qt.BrushStyle.NoBrush:
+                    p = it.pen()
+                    p.setWidth(size)
+                    it.setPen(p)
+
+    def on_bring_to_front(self):
+        if hasattr(self, 'draw_view') and self.draw_view.scene():
+            self.draw_view.scene().bring_to_front()
+
+    def on_move_forward(self):
+        if hasattr(self, 'draw_view') and self.draw_view.scene():
+            self.draw_view.scene().move_forward_one_step()
+
+    def on_move_backward(self):
+        if hasattr(self, 'draw_view') and self.draw_view.scene():
+            self.draw_view.scene().move_backward_one_step()
+
+    def on_send_to_back(self):
+        if hasattr(self, 'draw_view') and self.draw_view.scene():
+            self.draw_view.scene().send_to_back()
 
     def update_text_color_button_style(self):
         c = self.current_text_color
@@ -1672,16 +1876,19 @@ class ModernUI(QMainWindow):
     def on_text_align_clicked(self, align_type):
         self.current_text_alignment = align_type
         if hasattr(self, 'draw_view') and self.draw_view.scene():
-            for item in self.draw_view.scene().selectedItems():
+            scene = self.draw_view.scene()
+            scene.text_alignment = align_type
+            for item in scene.selectedItems():
                 if isinstance(item, ResizableTextItem):
                     item.set_alignment(align_type)
 
     def on_edit_text_clicked(self):
         if hasattr(self, 'draw_view') and self.draw_view.scene():
-            for item in self.draw_view.scene().selectedItems():
+            scene = self.draw_view.scene()
+            for item in scene.selectedItems():
                 if isinstance(item, ResizableTextItem):
                     item.start_editing()
-                    return
+                    break
 
     def on_undo_clicked(self):
         if hasattr(self, 'draw_view') and self.draw_view.scene():
@@ -1705,32 +1912,35 @@ class ModernUI(QMainWindow):
 
     def on_text_opacity_changed(self, val):
         self.lbl_opacity_val.setText(f"{val}%")
+        opacity_float = val / 100.0
         if hasattr(self, 'draw_view') and self.draw_view.scene():
-            for item in self.draw_view.scene().selectedItems():
-                if isinstance(item, ResizableTextItem):
-                    item.setOpacity(val / 100.0)
+            scene = self.draw_view.scene()
+            for item in scene.selectedItems():
+                item.setOpacity(opacity_float)
 
     def on_delete_selected_items(self):
         if hasattr(self, 'draw_view') and self.draw_view.scene():
             scene = self.draw_view.scene()
             for item in scene.selectedItems():
-                scene.push_undo_action({'type': 'remove', 'item': item})
-                scene.removeItem(item)
+                if not getattr(item, 'is_editing', False):
+                    scene.push_undo_action({'type': 'remove', 'item': item})
+                    scene.removeItem(item)
 
     def on_scene_selection_changed(self):
         if not hasattr(self, 'draw_view') or not self.draw_view.scene():
             return
-        selected = self.draw_view.scene().selectedItems()
+        scene = self.draw_view.scene()
+        selected = scene.selectedItems()
         for item in selected:
             if isinstance(item, ResizableTextItem):
                 f = item.font()
+                self.combo_font_family.blockSignals(True)
+                self.combo_font_family.setCurrentFont(QFont(f.family()))
+                self.combo_font_family.blockSignals(False)
+
                 self.spin_font_size.blockSignals(True)
                 self.spin_font_size.setValue(f.pointSize())
                 self.spin_font_size.blockSignals(False)
-
-                self.combo_font_family.blockSignals(True)
-                self.combo_font_family.setCurrentFont(f)
-                self.combo_font_family.blockSignals(False)
 
                 self.btn_text_bold.blockSignals(True)
                 self.btn_text_bold.setChecked(f.bold())
@@ -1745,16 +1955,15 @@ class ModernUI(QMainWindow):
                 self.btn_text_underline.blockSignals(False)
 
                 align = getattr(item, 'alignment', 'right')
-                if hasattr(self, 'btn_align_right'):
-                    self.btn_align_right.blockSignals(True)
-                    self.btn_align_center.blockSignals(True)
-                    self.btn_align_left.blockSignals(True)
-                    self.btn_align_right.setChecked(align == 'right')
-                    self.btn_align_center.setChecked(align == 'center')
-                    self.btn_align_left.setChecked(align == 'left')
-                    self.btn_align_right.blockSignals(False)
-                    self.btn_align_center.blockSignals(False)
-                    self.btn_align_left.blockSignals(False)
+                self.btn_align_right.blockSignals(True)
+                self.btn_align_center.blockSignals(True)
+                self.btn_align_left.blockSignals(True)
+                self.btn_align_right.setChecked(align == 'right')
+                self.btn_align_center.setChecked(align == 'center')
+                self.btn_align_left.setChecked(align == 'left')
+                self.btn_align_right.blockSignals(False)
+                self.btn_align_center.blockSignals(False)
+                self.btn_align_left.blockSignals(False)
 
                 op_val = int(round(item.opacity() * 100))
                 if hasattr(self, 'slider_opacity'):
@@ -1775,8 +1984,13 @@ class ModernUI(QMainWindow):
     def create_interactive_scene(self):
         scene = InteractiveScene(self)
         scene.mode = self.current_draw_mode
-        pen = QPen(self.current_draw_color, 3, Qt.PenStyle.SolidLine)
+        pen_size = getattr(self, 'current_pen_size', 6)
+        pen = QPen(self.current_draw_color, pen_size, Qt.PenStyle.SolidLine)
+        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+        pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
         scene.pen = pen
+        scene.pen_size = pen_size
+
         if hasattr(self, 'combo_font_family'):
             scene.text_font_family = self.combo_font_family.currentFont().family()
         if hasattr(self, 'spin_font_size'):
@@ -1797,17 +2011,48 @@ class ModernUI(QMainWindow):
 
     def set_draw_mode(self, mode):
         self.current_draw_mode = mode
+        for btn in [self.btn_mode_select, self.btn_mode_draw, self.btn_mode_whiteout, self.btn_mode_rect, self.btn_mode_srect, self.btn_mode_text]:
+            btn.setStyleSheet("background-color: #45475a; color: #cdd6f4;")
+            
+        if mode == 'select':
+            self.btn_mode_select.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+        elif mode == 'draw':
+            self.btn_mode_draw.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+        elif mode == 'whiteout':
+            self.btn_mode_whiteout.setStyleSheet("background-color: #a6e3a1; color: #11111b; font-weight: bold; border: 2px solid #ffffff;")
+        elif mode == 'rect':
+            self.btn_mode_rect.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+        elif mode == 'solid_rect':
+            self.btn_mode_srect.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+        elif mode == 'text':
+            self.btn_mode_text.setStyleSheet("background-color: #89b4fa; color: #11111b; font-weight: bold;")
+
         if hasattr(self, 'draw_view') and self.draw_view.scene():
-            self.draw_view.scene().mode = mode
+            scene = self.draw_view.scene()
+            scene.mode = mode
+            if mode != 'draw' and hasattr(scene, 'brush_preview_item'):
+                scene.brush_preview_item.hide()
 
     def pick_draw_color(self):
-        color = QColorDialog.getColor()
+        color = QColorDialog.getColor(self.current_draw_color, self, "Select Color")
         if color.isValid():
             self.current_draw_color = color
+            self.btn_draw_color.setStyleSheet(f"background-color: {color.name()}; color: {'#000000' if color.lightness() > 128 else '#ffffff'}; font-weight: bold;")
             if hasattr(self, 'draw_view') and self.draw_view.scene():
-                pen = self.draw_view.scene().pen
-                pen.setColor(color)
-                self.draw_view.scene().pen = pen
+                scene = self.draw_view.scene()
+                scene.pen.setColor(color)
+                for it in scene.selectedItems():
+                    if isinstance(it, QGraphicsPathItem):
+                        p = it.pen()
+                        p.setColor(color)
+                        it.setPen(p)
+                    elif isinstance(it, QGraphicsRectItem):
+                        if it.brush().style() != Qt.BrushStyle.NoBrush:
+                            it.setBrush(QBrush(color))
+                        else:
+                            p = it.pen()
+                            p.setColor(color)
+                            it.setPen(p)
 
     def load_canvas_dialog(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open File", "", "Files (*.pdf *.png *.jpg *.jpeg *.jfif *.webp *.bmp *.tiff *.tif *.ico *.gif);;All Files (*.*)")
@@ -1835,6 +2080,7 @@ class ModernUI(QMainWindow):
             
             pixmap = QPixmap(path)
             bg_item = scene.addPixmap(pixmap)
+            bg_item.setZValue(-10000)
             scene.setSceneRect(QRectF(pixmap.rect()))
             
             self.draw_scenes[0] = {'scene': scene, 'bg_item': bg_item}
@@ -1852,6 +2098,7 @@ class ModernUI(QMainWindow):
             pixmap = QPixmap.fromImage(img)
             
             bg_item = scene.addPixmap(pixmap)
+            bg_item.setZValue(-10000)
             scene.setSceneRect(QRectF(pixmap.rect()))
             self.draw_scenes[self.draw_current_page] = {'scene': scene, 'bg_item': bg_item}
 
@@ -1861,7 +2108,9 @@ class ModernUI(QMainWindow):
         self.set_draw_mode(self.current_draw_mode)
         pen = active_scene.pen
         pen.setColor(self.current_draw_color)
+        pen.setWidth(getattr(self, 'current_pen_size', 6))
         active_scene.pen = pen
+        active_scene.pen_size = getattr(self, 'current_pen_size', 6)
         
         self.lbl_draw_page.setText(f"Page {self.draw_current_page + 1} / {len(self.draw_doc)}")
 
@@ -1879,6 +2128,9 @@ class ModernUI(QMainWindow):
         out_path, _ = QFileDialog.getSaveFileName(self, "Save File", "", "PDF Files (*.pdf);;Images (*.png)")
         if not out_path: return
         
+        import numpy as np
+        from PIL import Image
+
         if out_path.endswith('.pdf'):
             if self.draw_doc:
                 out_doc = fitz.open(self.draw_pdf_path)
@@ -1888,38 +2140,70 @@ class ModernUI(QMainWindow):
                         scene = scene_dict['scene']
                         bg_item = scene_dict['bg_item']
                         
+                        if hasattr(scene, 'brush_preview_item'):
+                            scene.brush_preview_item.hide()
                         scene.is_saving = True
                         scene.clearSelection()
                         bg_item.hide()
                         rect = scene.sceneRect()
-                        image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
+                        
+                        image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32_Premultiplied)
                         image.fill(Qt.GlobalColor.transparent)
                         
                         from PyQt6.QtGui import QPainter
                         painter = QPainter(image)
+                        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
                         scene.render(painter)
                         painter.end()
                         bg_item.show()
                         scene.is_saving = False
                         
+                        # Process overlay with clean un-premultiplication to eliminate dark fringes around white shapes
+                        ptr = image.bits()
+                        ptr.setsize(image.sizeInBytes())
+                        arr = np.array(ptr, copy=True).reshape((image.height(), image.width(), 4))
+                        
+                        alpha = arr[:, :, 3].astype(np.float32) / 255.0
+                        mask = (alpha > 0) & (alpha < 1.0)
+                        for c in range(3):
+                            arr[mask, c] = np.clip(np.round(arr[mask, c] / alpha[mask]), 0, 255)
+                        
+                        # Set fully transparent pixels to white so interpolation in PDF viewers never samples black!
+                        arr[alpha == 0, 0] = 255
+                        arr[alpha == 0, 1] = 255
+                        arr[alpha == 0, 2] = 255
+                        
+                        rgba_arr = np.empty_like(arr)
+                        rgba_arr[:, :, 0] = arr[:, :, 2] # R
+                        rgba_arr[:, :, 1] = arr[:, :, 1] # G
+                        rgba_arr[:, :, 2] = arr[:, :, 0] # B
+                        rgba_arr[:, :, 3] = arr[:, :, 3] # A
+                        
                         temp_path = f"temp_draw_{i}.png"
-                        image.save(temp_path)
+                        Image.fromarray(rgba_arr, mode='RGBA').save(temp_path)
+                        
                         page = out_doc[i]
                         page.insert_image(page.rect, filename=temp_path)
-                        os.remove(temp_path)
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
                         
                 out_doc.save(out_path)
                 out_doc.close()
             else:
                 scene = self.draw_scenes[0]['scene']
+                if hasattr(scene, 'brush_preview_item'):
+                    scene.brush_preview_item.hide()
                 scene.is_saving = True
                 scene.clearSelection()
                 rect = scene.sceneRect()
                 image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
-                image.fill(Qt.GlobalColor.transparent)
+                image.fill(QColor(255, 255, 255))
                 
                 from PyQt6.QtGui import QPainter
                 painter = QPainter(image)
+                painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+                painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
                 scene.render(painter)
                 painter.end()
                 scene.is_saving = False
@@ -1932,23 +2216,29 @@ class ModernUI(QMainWindow):
                 page = doc.new_page(width=image.width(), height=image.height())
                 page.show_pdf_page(page.rect, img_doc, 0)
                 doc.save(out_path); doc.close()
-                os.remove(temp_path)
+                if os.path.exists(temp_path):
+                    os.remove(temp_path)
         else:
             scene = self.draw_scenes[self.draw_current_page]['scene']
+            if hasattr(scene, 'brush_preview_item'):
+                scene.brush_preview_item.hide()
             scene.is_saving = True
             scene.clearSelection()
             rect = scene.sceneRect()
             image = QImage(int(rect.width()), int(rect.height()), QImage.Format.Format_ARGB32)
-            image.fill(Qt.GlobalColor.transparent)
+            image.fill(QColor(255, 255, 255))
             
             from PyQt6.QtGui import QPainter
             painter = QPainter(image)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
             scene.render(painter)
             painter.end()
             scene.is_saving = False
             image.save(out_path)
             
         self.show_msg("Success", "File saved successfully!")
+
 
     def create_annotation_widget(self):
         tab = QWidget()
